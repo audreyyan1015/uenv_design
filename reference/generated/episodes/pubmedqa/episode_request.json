@@ -1,0 +1,35 @@
+{
+  "request_id": "request-pubmedqa",
+  "run_id": "demo-pubmedqa",
+  "episode_id": "episode-pubmedqa",
+  "task": {
+    "schema_version": "vnext.3",
+    "task_id": "pubmedqa/demo-pubmedqa",
+    "dataset": {
+      "id": "pubmedqa",
+      "revision": "synthetic-design-fixture-v1",
+      "split": "example",
+      "subset": ""
+    },
+    "sample_id": "demo-pubmedqa",
+    "input": {
+      "schema_ref": "uenv://packages/datasets/pubmedqa/1.0.0/PubmedqaInput",
+      "data": {
+        "instruction": "Does the provided abstract support the statement?",
+        "contexts": [
+          "Synthetic abstract for interface demonstration."
+        ]
+      }
+    },
+    "input_digest": "sha256:1ade3f8f79574b65e697961b7c8ae3169e493dfe17bc573b4c353e3382d2b08c"
+  },
+  "seed": 0,
+  "sample_index": 0,
+  "batch_id": "batch-pubmedqa",
+  "private_data": {
+    "schema_ref": "uenv://packages/datasets/pubmedqa/1.0.0/PubmedqaPrivateData",
+    "data": {
+      "answer": "maybe"
+    }
+  }
+}

@@ -1,0 +1,66 @@
+{
+  "request_id": "request-swe_verified",
+  "run_id": "demo-swe_verified",
+  "episode_id": "episode-swe_verified",
+  "task": {
+    "schema_version": "vnext.3",
+    "task_id": "swe-verified/demo-swe_verified",
+    "dataset": {
+      "id": "swe-verified",
+      "revision": "synthetic-design-fixture-v1",
+      "split": "example",
+      "subset": ""
+    },
+    "sample_id": "demo-swe_verified",
+    "input": {
+      "schema_ref": "uenv://packages/datasets/swe-verified/1.0.0/SweVerifiedInput",
+      "data": {
+        "instruction": "Synthetic repository repair task.",
+        "repo": "example/repo",
+        "base_commit": "1111111111111111111111111111111111111111",
+        "workspace_path": "/workspace",
+        "runtime_assets": [
+          {
+            "uri": "reference/fixtures/tests.json",
+            "digest": "sha256:708e62980f6134fdfc5feb7754006c2a9639083fc33458d94cc8c6c4b88bdf6c",
+            "size_bytes": 73,
+            "media_type": "application/json"
+          }
+        ]
+      }
+    },
+    "input_digest": "sha256:793733c0285d881628bfd2c450bde05db4a135e6b363e008ecd2f000ec689025"
+  },
+  "seed": 0,
+  "sample_index": 0,
+  "batch_id": "batch-swe_verified",
+  "private_data": {
+    "schema_ref": "uenv://packages/datasets/swe-verified/1.0.0/SweVerifiedPrivateData",
+    "data": {
+      "test_patch": {
+        "uri": "reference/fixtures/tests.json",
+        "digest": "sha256:708e62980f6134fdfc5feb7754006c2a9639083fc33458d94cc8c6c4b88bdf6c",
+        "size_bytes": 73,
+        "media_type": "application/json"
+      },
+      "reference_patch": null,
+      "fail_to_pass": [
+        "test_example"
+      ],
+      "pass_to_pass": [],
+      "evaluation_plan": {
+        "harness": {
+          "id": "harness/swe-example",
+          "version": "1.0.0",
+          "digest": "sha256:708e62980f6134fdfc5feb7754006c2a9639083fc33458d94cc8c6c4b88bdf6c"
+        },
+        "setup_argv": [],
+        "test_argv": [
+          "fixture-tests"
+        ],
+        "cwd": "/workspace",
+        "timeout_ms": 120000
+      }
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "id": "datasets/swe-smith",
+  "version": "1.0.0",
+  "entrypoints": {
+    "dataset_adapter": "swe_smith.dataset_adapter:SweSmithAdapter",
+    "environment": "swe_smith.environment:SweSmithEnvironment",
+    "scorer": "swe_smith.scorer:SweSmithScorer"
+  },
+  "task_schema": "uenv://packages/datasets/swe-smith/1.0.0/SweSmithInput",
+  "config_schemas": {
+    "environment": "uenv://schemas/vnext/EmptyConfig",
+    "scorer": "uenv://schemas/vnext/EmptyConfig"
+  },
+  "internet_access": false,
+  "required_capabilities": [
+    "exec.v1",
+    "filesystem.v1"
+  ],
+  "artifacts": [],
+  "provided_tools": [],
+  "schemas": [
+    {
+      "uri": "generated/packages/swe_smith/schemas/SweSmithInput.schema.json",
+      "digest": "sha256:f0b2724c50db043d21868ca33a501f6392b9b1ca01391a308677b191c41c4cde",
+      "size_bytes": 1081,
+      "media_type": "application/schema+json"
+    },
+    {
+      "uri": "generated/packages/swe_smith/schemas/SweSmithPrivateData.schema.json",
+      "digest": "sha256:d436088b64f0599424bbd47a082a07bef0d6cbcba9e13db2603ab5d488dc5b17",
+      "size_bytes": 1259,
+      "media_type": "application/schema+json"
+    }
+  ],
+  "private_schema": "uenv://packages/datasets/swe-smith/1.0.0/SweSmithPrivateData"
+}

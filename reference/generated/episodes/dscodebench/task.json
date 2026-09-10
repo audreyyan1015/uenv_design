@@ -1,0 +1,20 @@
+{
+  "schema_version": "vnext.3",
+  "task_id": "dscodebench/demo-dscodebench",
+  "dataset": {
+    "id": "dscodebench",
+    "revision": "synthetic-design-fixture-v1",
+    "split": "example",
+    "subset": ""
+  },
+  "sample_id": "demo-dscodebench",
+  "input": {
+    "schema_ref": "uenv://packages/datasets/dscodebench/1.0.0/DscodebenchInput",
+    "data": {
+      "instruction": "Return x + 1.",
+      "library": "python",
+      "entry_point": "solve"
+    }
+  },
+  "input_digest": "sha256:927e81aaadfa73b033a27fae5e8354854a5f80390f3364e03f3e41bbeabafc54"
+}

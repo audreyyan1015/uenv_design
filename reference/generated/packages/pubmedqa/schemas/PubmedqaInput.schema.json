@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uenv://packages/datasets/pubmedqa/1.0.0/PubmedqaInput",
+  "title": "PubmedqaInput",
+  "description": "Model-visible PubMedQA task data.",
+  "type": "object",
+  "properties": {
+    "instruction": {
+      "type": "string",
+      "description": "Question",
+      "minLength": 1
+    },
+    "contexts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Abstract passages in source order"
+    }
+  },
+  "required": [
+    "instruction",
+    "contexts"
+  ],
+  "additionalProperties": false
+}

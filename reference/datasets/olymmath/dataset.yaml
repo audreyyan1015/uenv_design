@@ -1,0 +1,11 @@
+id: datasets/olymmath
+version: 1.0.0
+entrypoints:
+  dataset_adapter: olymmath.dataset_adapter:OlymmathAdapter
+  environment: olymmath.environment:OlymmathEnvironment
+  scorer: olymmath.scorer:OlymmathScorer
+models:
+  input: olymmath.models:OlymmathInput
+  private_data: olymmath.models:OlymmathPrivateData
+internet_access: false
+required_capabilities: []

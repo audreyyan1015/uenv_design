@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uenv://schemas/vnext/EvaluationPlan",
+  "type": "object",
+  "description": "包拥有的评测执行计划；不能给 Agent 读取",
+  "properties": {
+    "harness": {
+      "$ref": "urn:uenv:vnext:contracts#/$defs/ResolvedComponent",
+      "description": "唯一 harness 选择，固定精确版本和 digest"
+    },
+    "setup_argv": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "string",
+          "description": "参数"
+        },
+        "description": "一次命令"
+      },
+      "description": "准备步骤"
+    },
+    "test_argv": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "参数"
+      },
+      "description": "测试入口命令"
+    },
+    "cwd": {
+      "type": "string",
+      "description": "评分沙箱目录"
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "评测预算"
+    }
+  },
+  "required": [
+    "harness",
+    "setup_argv",
+    "test_argv",
+    "cwd",
+    "timeout_ms"
+  ],
+  "additionalProperties": false
+}

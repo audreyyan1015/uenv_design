@@ -1,0 +1,84 @@
+{
+  "run_id": "demo-olymmath",
+  "purpose": "evaluation",
+  "environment": {
+    "implementation": {
+      "id": "datasets/olymmath",
+      "version": "1.0.0"
+    },
+    "config": {
+      "schema_ref": "uenv://schemas/vnext/EmptyConfig",
+      "data": {}
+    }
+  },
+  "agent": {
+    "implementation": {
+      "id": "agents/plain",
+      "version": "1.0.0"
+    },
+    "config": {
+      "schema_ref": "uenv://schemas/vnext/PlainAgentConfig",
+      "data": {
+        "history_policy": "full",
+        "system_prompt": ""
+      }
+    }
+  },
+  "tools": [],
+  "scorer": {
+    "implementation": {
+      "id": "datasets/olymmath",
+      "version": "1.0.0"
+    },
+    "config": {
+      "schema_ref": "uenv://schemas/vnext/EmptyConfig",
+      "data": {}
+    }
+  },
+  "backend": {
+    "implementation": {
+      "id": "backends/process",
+      "version": "1.0.0"
+    },
+    "config": {
+      "schema_ref": "uenv://schemas/vnext/ProcessBackendConfig",
+      "data": {
+        "runtime_profile": "example-only"
+      }
+    },
+    "resources": {
+      "cpu_cores": 1,
+      "memory_bytes": 1073741824,
+      "process_limit": 64,
+      "disk_bytes": 1073741824
+    }
+  },
+  "model": {
+    "endpoint": "http://localhost:9000/v1",
+    "credential_ref": "",
+    "model_id": "example",
+    "generation": {
+      "temperature": 0,
+      "top_p": 1,
+      "max_output_tokens": 1024,
+      "stop": []
+    },
+    "source": "simulated",
+    "max_transport_retries": 0
+  },
+  "limits": {
+    "total_timeout_ms": 300000,
+    "score_reserve_ms": 120000,
+    "max_generations": 1,
+    "max_tool_calls": 0,
+    "max_environment_steps": 0,
+    "max_total_output_tokens": 32768
+  },
+  "retry": {
+    "max_attempts": 1,
+    "initial_backoff_ms": 500,
+    "max_backoff_ms": 5000
+  },
+  "trajectory_retention_days": 7,
+  "schema_version": "vnext.3"
+}

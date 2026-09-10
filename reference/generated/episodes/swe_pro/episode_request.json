@@ -1,0 +1,66 @@
+{
+  "request_id": "request-swe_pro",
+  "run_id": "demo-swe_pro",
+  "episode_id": "episode-swe_pro",
+  "task": {
+    "schema_version": "vnext.3",
+    "task_id": "swe-pro/demo-swe_pro",
+    "dataset": {
+      "id": "swe-pro",
+      "revision": "synthetic-design-fixture-v1",
+      "split": "example",
+      "subset": ""
+    },
+    "sample_id": "demo-swe_pro",
+    "input": {
+      "schema_ref": "uenv://packages/datasets/swe-pro/1.0.0/SweProInput",
+      "data": {
+        "instruction": "Synthetic repository repair task.",
+        "repo": "example/repo",
+        "base_commit": "1111111111111111111111111111111111111111",
+        "workspace_path": "/workspace",
+        "runtime_assets": [
+          {
+            "uri": "reference/fixtures/tests.json",
+            "digest": "sha256:708e62980f6134fdfc5feb7754006c2a9639083fc33458d94cc8c6c4b88bdf6c",
+            "size_bytes": 73,
+            "media_type": "application/json"
+          }
+        ]
+      }
+    },
+    "input_digest": "sha256:677dfbcd803f4c2b5bd8f600a718adca958d2a4fb1448ccca687474085e13383"
+  },
+  "seed": 0,
+  "sample_index": 0,
+  "batch_id": "batch-swe_pro",
+  "private_data": {
+    "schema_ref": "uenv://packages/datasets/swe-pro/1.0.0/SweProPrivateData",
+    "data": {
+      "test_patch": {
+        "uri": "reference/fixtures/tests.json",
+        "digest": "sha256:708e62980f6134fdfc5feb7754006c2a9639083fc33458d94cc8c6c4b88bdf6c",
+        "size_bytes": 73,
+        "media_type": "application/json"
+      },
+      "reference_patch": null,
+      "fail_to_pass": [
+        "test_example"
+      ],
+      "pass_to_pass": [],
+      "evaluation_plan": {
+        "harness": {
+          "id": "harness/swe-example",
+          "version": "1.0.0",
+          "digest": "sha256:708e62980f6134fdfc5feb7754006c2a9639083fc33458d94cc8c6c4b88bdf6c"
+        },
+        "setup_argv": [],
+        "test_argv": [
+          "fixture-tests"
+        ],
+        "cwd": "/workspace",
+        "timeout_ms": 120000
+      }
+    }
+  }
+}

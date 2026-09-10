@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uenv://packages/datasets/olymmath/1.0.0/OlymmathInput",
+  "title": "OlymmathInput",
+  "description": "Model-visible OlymMATH problem.",
+  "type": "object",
+  "properties": {
+    "instruction": {
+      "type": "string",
+      "description": "Math problem",
+      "minLength": 1
+    },
+    "language": {
+      "type": "string",
+      "enum": [
+        "en",
+        "zh"
+      ],
+      "description": "Problem language"
+    },
+    "difficulty": {
+      "type": "string",
+      "enum": [
+        "easy",
+        "hard"
+      ],
+      "description": "Problem difficulty"
+    },
+    "subject": {
+      "type": "string",
+      "description": "Math subject"
+    }
+  },
+  "required": [
+    "instruction",
+    "language",
+    "difficulty",
+    "subject"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uenv://packages/datasets/gsm8k/1.0.0/Gsm8kInput",
+  "title": "Gsm8kInput",
+  "description": "Model-visible GSM8K task data.",
+  "type": "object",
+  "properties": {
+    "instruction": {
+      "type": "string",
+      "description": "Task question",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "instruction"
+  ],
+  "additionalProperties": false
+}

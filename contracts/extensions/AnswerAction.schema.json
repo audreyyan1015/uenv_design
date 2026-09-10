@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uenv://schemas/vnext/AnswerAction",
+  "type": "object",
+  "description": "问答环境动作",
+  "properties": {
+    "answer": {
+      "type": "string",
+      "description": "完整回答"
+    }
+  },
+  "required": [
+    "answer"
+  ],
+  "additionalProperties": false
+}

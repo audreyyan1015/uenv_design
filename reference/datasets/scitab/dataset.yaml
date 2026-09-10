@@ -1,0 +1,11 @@
+id: datasets/scitab
+version: 1.0.0
+entrypoints:
+  dataset_adapter: scitab.dataset_adapter:ScitabAdapter
+  environment: scitab.environment:ScitabEnvironment
+  scorer: scitab.scorer:ScitabScorer
+models:
+  input: scitab.models:ScitabInput
+  private_data: scitab.models:ScitabPrivateData
+internet_access: false
+required_capabilities: []

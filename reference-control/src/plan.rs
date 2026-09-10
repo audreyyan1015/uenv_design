@@ -1,0 +1,549 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde_json::{Map, Value, json};
+
+use crate::contracts::{ContractSchema, array, digest, object, string, u64_field};
+use crate::{ControlError, Result};
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RuntimeKind {
+    Process,
+    Container,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ComponentMetadata {
+    pub component: Value,
+    /// Roles exported by this installed component, for example `environment`
+    /// and `scorer` for one dataset package.
+    pub roles: BTreeSet<String>,
+    pub role_config_schemas: BTreeMap<String, String>,
+    pub required_capabilities: BTreeSet<String>,
+    pub task_schemas: BTreeSet<String>,
+    pub private_schemas: BTreeSet<String>,
+    pub native_profiles: BTreeSet<String>,
+    /// Standard interfaces through which an Agent may access this tool. This
+    /// metadata belongs to a component with the `tool` role.
+    pub tool_interfaces: Vec<ToolInterfaceSupport>,
+    /// Dataset-package runtime copied into the component catalog at install time.
+    /// It is metadata for the selected Environment, not another component selector.
+    pub default_runtime: Option<Value>,
+    pub requires_internet_access: bool,
+    pub runtime_kind: Option<RuntimeKind>,
+    pub supports_internet_access: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolInterfaceSupport {
+    pub interface: String,
+    pub adapter: Value,
+    pub execution_scope: String,
+    pub required_capabilities: BTreeSet<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AgentToolProfile {
+    pub agent: Value,
+    pub required_names: BTreeSet<String>,
+    /// Ordered interface preference from the selected Agent package. A new
+    /// tool using an existing interface does not require an Agent update.
+    pub supported_interfaces: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct ComponentCatalog {
+    entries: BTreeMap<(String, String), ComponentMetadata>,
+}
+
+impl ComponentCatalog {
+    pub fn insert(&mut self, metadata: ComponentMetadata) -> Result<()> {
+        if !metadata
+            .role_config_schemas
+            .keys()
+            .all(|role| metadata.roles.contains(role))
+            || !metadata
+                .roles
+                .iter()
+                .all(|role| metadata.role_config_schemas.contains_key(role))
+        {
+            return Err(ControlError::new("ROLE_CONFIG_SCHEMA_MISMATCH"));
+        }
+        let exports_tool = metadata.roles.contains("tool");
+        if exports_tool == metadata.tool_interfaces.is_empty() {
+            return Err(ControlError::new("TOOL_INTERFACE_METADATA_MISMATCH"));
+        }
+        let interface_names: BTreeSet<&str> = metadata
+            .tool_interfaces
+            .iter()
+            .map(|interface| interface.interface.as_str())
+            .collect();
+        if interface_names.len() != metadata.tool_interfaces.len() {
+            return Err(ControlError::new("DUPLICATE_TOOL_INTERFACE"));
+        }
+        let key = component_key(&metadata.component)?;
+        if let Some(existing) = self.entries.get(&key) {
+            if existing == &metadata {
+                return Ok(());
+            }
+            return Err(ControlError::new("CONFLICTING_COMPONENT_METADATA"));
+        }
+        self.entries.insert(key, metadata);
+        Ok(())
+    }
+
+    pub fn get(&self, reference: &Value) -> Result<&ComponentMetadata> {
+        let metadata = self
+            .entries
+            .get(&component_key(reference)?)
+            .ok_or_else(|| ControlError::new("COMPONENT_NOT_FOUND"))?;
+        if reference
+            .get("digest")
+            .is_some_and(|digest| Some(digest) != metadata.component.get("digest"))
+        {
+            return Err(ControlError::new("COMPONENT_DIGEST_MISMATCH"));
+        }
+        Ok(metadata)
+    }
+}
+
+pub struct PlanResolver<'a> {
+    pub schema: &'a ContractSchema,
+    pub catalog: &'a ComponentCatalog,
+    pub agent_profile: &'a AgentToolProfile,
+}
+
+impl PlanResolver<'_> {
+    pub fn resolve(
+        &self,
+        episode: &Value,
+        run: &Value,
+        accepted_at_ms: u64,
+        image_resolver: &dyn Fn(&Value, &Value, &Value) -> Result<Value>,
+    ) -> Result<Value> {
+        self.schema.validate_shape("EpisodeRequest", episode)?;
+        self.schema.validate_shape("RunSpec", run)?;
+        if string(episode, "run_id")? != string(run, "run_id")? {
+            return Err(ControlError::new("RUN_ID_MISMATCH"));
+        }
+
+        let task = episode
+            .get("task")
+            .ok_or_else(|| ControlError::new("MISSING_FIELD:EpisodeRequest.task"))?;
+        let task_schema = task
+            .pointer("/input/schema_ref")
+            .and_then(Value::as_str)
+            .ok_or_else(|| ControlError::new("INVALID_TASK_SCHEMA"))?;
+        let private_schema = episode
+            .get("private_data")
+            .map(|private_data| {
+                private_data
+                    .get("schema_ref")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| ControlError::new("INVALID_PRIVATE_SCHEMA"))
+            })
+            .transpose()?;
+
+        let mut selected = BTreeMap::<String, Value>::new();
+        let mut required = BTreeSet::<String>::new();
+
+        let mut plan = Map::new();
+        for field in ["run_id", "episode_id", "task", "seed"] {
+            plan.insert(
+                field.to_owned(),
+                episode.get(field).cloned().ok_or_else(|| {
+                    ControlError::new(format!("MISSING_FIELD:EpisodeRequest.{field}"))
+                })?,
+            );
+        }
+        if let Some(value) = episode.get("private_data") {
+            plan.insert("private_data".to_owned(), value.clone());
+        }
+        for field in ["purpose", "model", "limits", "training"] {
+            if let Some(value) = run.get(field) {
+                plan.insert(field.to_owned(), value.clone());
+            }
+        }
+
+        // The harness is selected only at private_data.data.evaluation_plan.harness.
+        // Resolve that existing field in place so it receives the same digest,
+        // version and capability checks as every other executable component.
+        if let Some(requested_harness) = plan
+            .get("private_data")
+            .and_then(|value| value.pointer("/data/evaluation_plan/harness"))
+            .cloned()
+        {
+            let resolved_harness =
+                self.resolve_role(&requested_harness, "harness", &mut selected, &mut required)?;
+            plan.get_mut("private_data")
+                .and_then(|value| value.pointer_mut("/data/evaluation_plan/harness"))
+                .ok_or_else(|| ControlError::new("HARNESS_SELECTION_MISSING"))?
+                .clone_from(&resolved_harness);
+        }
+
+        for role in ["environment", "agent", "scorer", "backend"] {
+            let spec = run
+                .get(role)
+                .ok_or_else(|| ControlError::new(format!("MISSING_FIELD:RunSpec.{role}")))?;
+            let mut resolved_spec = object(spec, role)?.clone();
+            let requested = spec
+                .get("implementation")
+                .ok_or_else(|| ControlError::new("MISSING_COMPONENT_IMPLEMENTATION"))?;
+            let config_schema = spec
+                .pointer("/config/schema_ref")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ControlError::new("INVALID_COMPONENT_CONFIG"))?;
+            let metadata = self.catalog.get(requested)?;
+            if metadata.role_config_schemas.get(role).map(String::as_str) != Some(config_schema) {
+                return Err(ControlError::new("COMPONENT_CONFIG_SCHEMA_MISMATCH"));
+            }
+            let resolved = self.resolve_role(requested, role, &mut selected, &mut required)?;
+            resolved_spec.insert("implementation".to_owned(), resolved);
+            plan.insert(role.to_owned(), Value::Object(resolved_spec));
+        }
+
+        let environment = plan
+            .get("environment")
+            .and_then(|v| v.get("implementation"))
+            .ok_or_else(|| ControlError::new("MISSING_RESOLVED_ENVIRONMENT"))?;
+        let environment_metadata = self.catalog.get(environment)?;
+        let scorer = plan
+            .get("scorer")
+            .and_then(|v| v.get("implementation"))
+            .ok_or_else(|| ControlError::new("MISSING_RESOLVED_SCORER"))?;
+        let scorer_metadata = self.catalog.get(scorer)?;
+        for metadata in [environment_metadata, scorer_metadata] {
+            if !metadata.task_schemas.contains(task_schema) {
+                return Err(ControlError::new("COMPONENT_TASK_SCHEMA_MISMATCH"));
+            }
+        }
+        if let Some(private_schema) = private_schema
+            && !scorer_metadata.private_schemas.contains(private_schema)
+        {
+            return Err(ControlError::new("SCORER_PRIVATE_SCHEMA_MISMATCH"));
+        }
+        let internet_access = environment_metadata.requires_internet_access;
+        if internet_access {
+            required.insert("internet_access.v1".to_owned());
+        }
+
+        let resolved_agent = plan
+            .get("agent")
+            .and_then(|v| v.get("implementation"))
+            .ok_or_else(|| ControlError::new("MISSING_RESOLVED_AGENT"))?;
+        let resolved_tools = self.resolve_tools(
+            resolved_agent,
+            array(run, "tools")?,
+            &mut selected,
+            &mut required,
+        )?;
+        plan.insert("tools".to_owned(), Value::Array(resolved_tools));
+
+        let backend = plan
+            .get("backend")
+            .and_then(|v| v.get("implementation"))
+            .ok_or_else(|| ControlError::new("MISSING_RESOLVED_BACKEND"))?;
+        let backend_metadata = self.catalog.get(backend)?;
+        if internet_access && !backend_metadata.supports_internet_access {
+            return Err(ControlError::new("INTERNET_ACCESS_UNAVAILABLE"));
+        }
+        match backend_metadata
+            .runtime_kind
+            .as_ref()
+            .ok_or_else(|| ControlError::new("BACKEND_RUNTIME_KIND_MISSING"))?
+        {
+            RuntimeKind::Container => {
+                let candidates = [
+                    ("run", run.get("runtime")),
+                    ("task", task.get("runtime")),
+                    ("package", environment_metadata.default_runtime.as_ref()),
+                ];
+                let (source, runtime) = candidates
+                    .into_iter()
+                    .find_map(|(source, value)| value.map(|value| (source, value)))
+                    .ok_or_else(|| ControlError::new("MISSING_IMAGE"))?;
+                let image = runtime
+                    .get("image")
+                    .ok_or_else(|| ControlError::new("MISSING_IMAGE"))?;
+                let resolved_image = image_resolver(image, task, plan.get("backend").unwrap())?;
+                plan.insert(
+                    "runtime".to_owned(),
+                    json!({"image": resolved_image, "image_source": source}),
+                );
+            }
+            RuntimeKind::Process => {
+                // Package/task images describe an available container route. They do not
+                // force a Process run to consume an OCI image. Only a user run override
+                // is an explicit request for this execution and therefore conflicts.
+                if run.get("runtime").is_some() {
+                    return Err(ControlError::new("PROCESS_IMAGE_CONFLICT"));
+                }
+                let profile = plan
+                    .get("backend")
+                    .and_then(|v| v.pointer("/config/data/runtime_profile"))
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| ControlError::new("RUNTIME_PROFILE_MISSING"))?;
+                if !environment_metadata.native_profiles.contains(profile) {
+                    return Err(ControlError::new("NATIVE_PROFILE_NOT_VERIFIED"));
+                }
+            }
+        }
+
+        plan.insert("attempt_id".to_owned(), json!(1));
+        plan.insert(
+            "required_capabilities".to_owned(),
+            Value::Array(required.into_iter().map(Value::String).collect()),
+        );
+        plan.insert("internet_access".to_owned(), Value::Bool(internet_access));
+        plan.insert(
+            "deadline_at_ms".to_owned(),
+            json!(
+                accepted_at_ms
+                    + run
+                        .pointer("/limits/total_timeout_ms")
+                        .and_then(Value::as_u64)
+                        .ok_or_else(|| ControlError::new("INVALID_TOTAL_TIMEOUT"))?
+            ),
+        );
+        let plan = seal_plan(&Value::Object(plan))?;
+        validate_execution_plan(&plan, self.schema)?;
+        Ok(plan)
+    }
+
+    fn resolve_role(
+        &self,
+        requested: &Value,
+        role: &str,
+        selected: &mut BTreeMap<String, Value>,
+        required: &mut BTreeSet<String>,
+    ) -> Result<Value> {
+        if !self.catalog.get(requested)?.roles.contains(role) {
+            return Err(ControlError::new(format!("COMPONENT_ROLE_MISMATCH:{role}")));
+        }
+        self.resolve_component(requested, selected, required)
+    }
+
+    fn resolve_component(
+        &self,
+        requested: &Value,
+        selected: &mut BTreeMap<String, Value>,
+        required: &mut BTreeSet<String>,
+    ) -> Result<Value> {
+        let metadata = self.catalog.get(requested)?.clone();
+        self.schema
+            .validate_shape("ResolvedComponent", &metadata.component)?;
+        if !matches_ref(requested, &metadata.component)? {
+            return Err(ControlError::new("COMPONENT_RESOLUTION_MISMATCH"));
+        }
+        let id = string(&metadata.component, "id")?.to_owned();
+        if let Some(existing) = selected.get(&id) {
+            if existing != &metadata.component {
+                return Err(ControlError::new("CONFLICTING_COMPONENT_LOCK"));
+            }
+            return Ok(existing.clone());
+        }
+        selected.insert(id, metadata.component.clone());
+        required.extend(metadata.required_capabilities);
+        Ok(metadata.component)
+    }
+
+    fn resolve_tools(
+        &self,
+        agent: &Value,
+        bindings: &[Value],
+        selected: &mut BTreeMap<String, Value>,
+        required: &mut BTreeSet<String>,
+    ) -> Result<Vec<Value>> {
+        if !matches_ref(agent, &self.agent_profile.agent)? {
+            return Err(ControlError::new("AGENT_PROFILE_MISMATCH"));
+        }
+        let names: Vec<&str> = bindings
+            .iter()
+            .map(|binding| string(binding, "name"))
+            .collect::<Result<_>>()?;
+        if names.iter().copied().collect::<BTreeSet<_>>().len() != names.len() {
+            return Err(ControlError::new("DUPLICATE_TOOL_NAME"));
+        }
+        let provided: BTreeSet<String> = names.iter().map(|name| (*name).to_owned()).collect();
+        if !self.agent_profile.required_names.is_subset(&provided) {
+            return Err(ControlError::new("MISSING_REQUIRED_TOOLS"));
+        }
+        if self
+            .agent_profile
+            .supported_interfaces
+            .iter()
+            .collect::<BTreeSet<_>>()
+            .len()
+            != self.agent_profile.supported_interfaces.len()
+        {
+            return Err(ControlError::new("DUPLICATE_AGENT_TOOL_INTERFACE"));
+        }
+
+        let mut resolved = Vec::with_capacity(bindings.len());
+        for binding in bindings {
+            let name = string(binding, "name")?;
+            let requested = binding
+                .get("implementation")
+                .ok_or_else(|| ControlError::new("MISSING_TOOL_IMPLEMENTATION"))?;
+            let config_schema = binding
+                .pointer("/config/schema_ref")
+                .and_then(Value::as_str)
+                .ok_or_else(|| ControlError::new("INVALID_TOOL_CONFIG"))?;
+            let metadata = self.catalog.get(requested)?;
+            if metadata.role_config_schemas.get("tool").map(String::as_str) != Some(config_schema) {
+                return Err(ControlError::new("TOOL_CONFIG_SCHEMA_MISMATCH"));
+            }
+
+            let mut support = None;
+            for interface in &self.agent_profile.supported_interfaces {
+                let matches: Vec<&ToolInterfaceSupport> = metadata
+                    .tool_interfaces
+                    .iter()
+                    .filter(|candidate| candidate.interface == *interface)
+                    .collect();
+                if matches.len() > 1 {
+                    return Err(ControlError::new("DUPLICATE_TOOL_INTERFACE"));
+                }
+                if let Some(candidate) = matches.first() {
+                    support = Some(*candidate);
+                    break;
+                }
+            }
+            let support = support.ok_or_else(|| ControlError::new("UNSUPPORTED_TOOL_INTERFACE"))?;
+            if support.execution_scope == "agent_state" && !support.required_capabilities.is_empty()
+            {
+                return Err(ControlError::new("STATE_TOOL_REQUESTS_EXTERNAL_CAPABILITY"));
+            }
+            let implementation = self.resolve_role(requested, "tool", selected, required)?;
+            let adapter =
+                self.resolve_role(&support.adapter, "tool_adapter", selected, required)?;
+            required.extend(support.required_capabilities.iter().cloned());
+            resolved.push(json!({
+                "name": name,
+                "implementation": implementation,
+                "adapter": adapter,
+                "config": binding.get("config").cloned().ok_or_else(|| ControlError::new("MISSING_TOOL_CONFIG"))?,
+                "interface": support.interface,
+                "execution_scope": support.execution_scope,
+                "required_capabilities": support.required_capabilities,
+            }));
+        }
+        Ok(resolved)
+    }
+}
+
+pub fn seal_plan(plan: &Value) -> Result<Value> {
+    let mut object = object(plan, "ExecutionPlan")?.clone();
+    object.remove("plan_digest");
+    let value = Value::Object(object.clone());
+    object.insert("plan_digest".to_owned(), Value::String(digest(&value)?));
+    Ok(Value::Object(object))
+}
+
+pub fn retry_execution_plan(
+    plan: &Value,
+    schema: &ContractSchema,
+    max_attempts: u64,
+) -> Result<Value> {
+    validate_execution_plan(plan, schema)?;
+    let attempt_id = u64_field(plan, "attempt_id")?;
+    if attempt_id >= max_attempts {
+        return Err(ControlError::new("MAX_ATTEMPTS_REACHED"));
+    }
+    let mut next = object(plan, "ExecutionPlan")?.clone();
+    next.insert("attempt_id".to_owned(), json!(attempt_id + 1));
+    seal_plan(&Value::Object(next))
+}
+
+pub fn validate_execution_plan(plan: &Value, schema: &ContractSchema) -> Result<()> {
+    schema.validate_shape("ExecutionPlan", plan)?;
+    if seal_plan(plan)?.get("plan_digest") != plan.get("plan_digest") {
+        return Err(ControlError::new("PLAN_DIGEST_MISMATCH"));
+    }
+    let task = plan
+        .get("task")
+        .ok_or_else(|| ControlError::new("MISSING_TASK"))?;
+    if digest(
+        task.get("input")
+            .ok_or_else(|| ControlError::new("MISSING_TASK_INPUT"))?,
+    )? != string(task, "input_digest")?
+    {
+        return Err(ControlError::new("INPUT_DIGEST_MISMATCH"));
+    }
+    let tools = array(plan, "tools")?;
+    let names: Vec<&str> = tools
+        .iter()
+        .map(|v| string(v, "name"))
+        .collect::<Result<_>>()?;
+    if names.iter().copied().collect::<BTreeSet<_>>().len() != names.len() {
+        return Err(ControlError::new("DUPLICATE_TOOL_NAME"));
+    }
+    let required: Vec<&str> = array(plan, "required_capabilities")?
+        .iter()
+        .map(|v| {
+            v.as_str()
+                .ok_or_else(|| ControlError::new("INVALID_CAPABILITY"))
+        })
+        .collect::<Result<_>>()?;
+    if required.iter().copied().collect::<BTreeSet<_>>().len() != required.len() {
+        return Err(ControlError::new("DUPLICATE_CAPABILITY"));
+    }
+    let required_set: BTreeSet<&str> = required.into_iter().collect();
+    for tool in tools {
+        for capability in array(tool, "required_capabilities")? {
+            let capability = capability
+                .as_str()
+                .ok_or_else(|| ControlError::new("INVALID_CAPABILITY"))?;
+            if !required_set.contains(capability) {
+                return Err(ControlError::new("MISSING_TOOL_CAPABILITIES"));
+            }
+        }
+    }
+    let limits = plan
+        .get("limits")
+        .ok_or_else(|| ControlError::new("MISSING_LIMITS"))?;
+    if u64_field(limits, "score_reserve_ms")? > u64_field(limits, "total_timeout_ms")? {
+        return Err(ControlError::new("INVALID_SCORE_RESERVE"));
+    }
+    match (string(plan, "purpose")?, plan.get("training")) {
+        ("training", None) => {
+            return Err(ControlError::new("MISSING_TRAINING_CONFIGURATION"));
+        }
+        ("evaluation", Some(_)) => {
+            return Err(ControlError::new("UNEXPECTED_TRAINING_CONFIGURATION"));
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+pub fn verify_actual_tools(expected: &[Value], actual: &[Value]) -> Result<()> {
+    fn routes(values: &[Value]) -> Result<BTreeMap<String, Value>> {
+        let mut routes = BTreeMap::new();
+        for value in values {
+            let name = string(value, "name")?.to_owned();
+            if routes.insert(name, value.clone()).is_some() {
+                return Err(ControlError::new("DUPLICATE_ACTUAL_TOOL_NAME"));
+            }
+        }
+        Ok(routes)
+    }
+    if routes(expected)? != routes(actual)? {
+        return Err(ControlError::new("ACTUAL_TOOL_ROUTING_MISMATCH"));
+    }
+    Ok(())
+}
+
+fn matches_ref(requested: &Value, resolved: &Value) -> Result<bool> {
+    Ok(string(requested, "id")? == string(resolved, "id")?
+        && string(requested, "version")? == string(resolved, "version")?
+        && requested
+            .get("digest")
+            .is_none_or(|value| Some(value) == resolved.get("digest")))
+}
+
+fn component_key(reference: &Value) -> Result<(String, String)> {
+    Ok((
+        string(reference, "id")?.to_owned(),
+        string(reference, "version")?.to_owned(),
+    ))
+}

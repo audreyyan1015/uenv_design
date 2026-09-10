@@ -1,0 +1,36 @@
+{
+  "id": "datasets/dscodebench",
+  "version": "1.0.0",
+  "entrypoints": {
+    "dataset_adapter": "dscodebench.dataset_adapter:DscodebenchAdapter",
+    "environment": "dscodebench.environment:DscodebenchEnvironment",
+    "scorer": "dscodebench.scorer:DscodebenchScorer"
+  },
+  "task_schema": "uenv://packages/datasets/dscodebench/1.0.0/DscodebenchInput",
+  "config_schemas": {
+    "environment": "uenv://schemas/vnext/EmptyConfig",
+    "scorer": "uenv://schemas/vnext/EmptyConfig"
+  },
+  "internet_access": false,
+  "required_capabilities": [
+    "exec.v1",
+    "filesystem.v1"
+  ],
+  "artifacts": [],
+  "provided_tools": [],
+  "schemas": [
+    {
+      "uri": "generated/packages/dscodebench/schemas/DscodebenchInput.schema.json",
+      "digest": "sha256:628069ff5fe1f955963e45ed27f57a4ff12df416c24977af9546e1e1e5eff697",
+      "size_bytes": 680,
+      "media_type": "application/schema+json"
+    },
+    {
+      "uri": "generated/packages/dscodebench/schemas/DscodebenchPrivateData.schema.json",
+      "digest": "sha256:4cedb98bb29241530fe48a5a33d94ce8230a947274ea6c9d7169c49623e9f36d",
+      "size_bytes": 1178,
+      "media_type": "application/schema+json"
+    }
+  ],
+  "private_schema": "uenv://packages/datasets/dscodebench/1.0.0/DscodebenchPrivateData"
+}

@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uenv://packages/datasets/swe-smith/1.0.0/SweSmithPrivateData",
+  "title": "SweSmithPrivateData",
+  "description": "Scorer-only SWE-smith tests.",
+  "type": "object",
+  "properties": {
+    "test_patch": {
+      "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef",
+      "description": "Hidden test patch"
+    },
+    "reference_patch": {
+      "anyOf": [
+        {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional reference patch",
+      "default": null
+    },
+    "fail_to_pass": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Tests that must change from failing to passing"
+    },
+    "pass_to_pass": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Tests that must remain passing"
+    },
+    "evaluation_plan": {
+      "$ref": "uenv://schemas/vnext/EvaluationPlan",
+      "description": "Only harness execution configuration"
+    }
+  },
+  "required": [
+    "test_patch",
+    "fail_to_pass",
+    "pass_to_pass",
+    "evaluation_plan"
+  ],
+  "additionalProperties": false
+}

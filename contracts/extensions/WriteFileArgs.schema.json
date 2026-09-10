@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uenv://schemas/vnext/WriteFileArgs",
+  "type": "object",
+  "description": "写入工具参数",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "工作区内路径"
+    },
+    "content": {
+      "type": "string",
+      "description": "完整写入内容"
+    }
+  },
+  "required": [
+    "path",
+    "content"
+  ],
+  "additionalProperties": false
+}

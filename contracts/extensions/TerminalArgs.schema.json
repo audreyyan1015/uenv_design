@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uenv://schemas/vnext/TerminalArgs",
+  "type": "object",
+  "description": "终端工具参数",
+  "properties": {
+    "argv": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "description": "单个参数"
+      },
+      "description": "显式 argv；需要 shell 时明确给出 shell -c 参数"
+    },
+    "cwd": {
+      "type": "string",
+      "description": "沙箱内目录"
+    }
+  },
+  "required": [
+    "argv",
+    "cwd"
+  ],
+  "additionalProperties": false
+}

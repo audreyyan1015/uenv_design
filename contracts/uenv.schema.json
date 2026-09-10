@@ -1,0 +1,2911 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:uenv:vnext:contracts",
+  "$defs": {
+    "ComponentRef": {
+      "type": "object",
+      "description": "作者指定的组件坐标；提交时解析为 ResolvedComponent",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "version": {
+          "type": "string",
+          "description": "精确版本或提交时解析的版本约束"
+        },
+        "digest": {
+          "type": "string",
+          "description": "内容 SHA-256；必须对应实际字节",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "id",
+        "version"
+      ],
+      "additionalProperties": false
+    },
+    "ResolvedComponent": {
+      "type": "object",
+      "description": "不可变组件引用；执行期间不得重新解析 latest",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "version": {
+          "type": "string",
+          "description": "已解析精确版本"
+        },
+        "digest": {
+          "type": "string",
+          "description": "内容 SHA-256；必须对应实际字节",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "digest"
+      ],
+      "additionalProperties": false
+    },
+    "ArtifactRef": {
+      "type": "object",
+      "description": "不可变产物引用；URI 不得含凭据",
+      "properties": {
+        "uri": {
+          "type": "string",
+          "description": "支持的存储 URI；访问凭据由身份系统提供"
+        },
+        "digest": {
+          "type": "string",
+          "description": "内容 SHA-256；必须对应实际字节",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "size_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "字节数"
+        },
+        "media_type": {
+          "type": "string",
+          "description": "MIME 类型"
+        }
+      },
+      "required": [
+        "uri",
+        "digest",
+        "size_bytes",
+        "media_type"
+      ],
+      "additionalProperties": false
+    },
+    "ErrorRecord": {
+      "type": "object",
+      "description": "统一结构化错误；任务答错不属于基础设施错误",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "稳定大写错误码，如 SCORER_FAILED"
+        },
+        "phase": {
+          "type": "string",
+          "description": "发生阶段",
+          "enum": [
+            "validation",
+            "queue",
+            "prepare",
+            "agent",
+            "model",
+            "tool",
+            "environment",
+            "score",
+            "persist",
+            "cleanup"
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "可读说明，不放密钥或完整私有评分输入"
+        },
+        "retryable": {
+          "type": "boolean",
+          "description": "由错误分类决定的重试资格；不是立即重试命令"
+        },
+        "operation_id": {
+          "type": "string",
+          "description": "已经接纳的外部操作身份；按 phase 引用同一次操作已有的 generation_id、tool_call_id 或 environment_step_index 字符串，不另造第二套身份",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "diagnostic_ref": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef",
+          "description": "完整诊断材料引用"
+        }
+      },
+      "required": [
+        "code",
+        "phase",
+        "message",
+        "retryable"
+      ],
+      "additionalProperties": false
+    },
+    "ContentPart": {
+      "type": "object",
+      "description": "消息内容段；文本与外部产物二选一，由 kind 指定",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "description": "内容种类",
+          "enum": [
+            "text",
+            "artifact"
+          ]
+        },
+        "text": {
+          "type": "string",
+          "description": "原始文本，不截断"
+        },
+        "artifact": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "properties": {
+            "kind": {
+              "const": "text"
+            }
+          },
+          "required": [
+            "text"
+          ],
+          "not": {
+            "required": [
+              "artifact"
+            ]
+          }
+        },
+        {
+          "properties": {
+            "kind": {
+              "const": "artifact"
+            }
+          },
+          "required": [
+            "artifact"
+          ],
+          "not": {
+            "required": [
+              "text"
+            ]
+          }
+        }
+      ]
+    },
+    "Message": {
+      "type": "object",
+      "description": "模型可见消息；工具调用详情通过 ToolCall 单独记录",
+      "properties": {
+        "role": {
+          "type": "string",
+          "description": "消息来源",
+          "enum": [
+            "system",
+            "user",
+            "assistant",
+            "tool"
+          ]
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/ContentPart"
+          },
+          "description": "有序内容段"
+        },
+        "tool_call_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "role",
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    "TypedConfig": {
+      "type": "object",
+      "description": "扩展信封；必须由 SchemaRegistry 绑定 schema_ref 对应的已注册 schema 后校验 data，禁止仅做信封校验",
+      "properties": {
+        "schema_ref": {
+          "type": "string",
+          "description": "精确 schema URI，未知 URI 必须拒绝",
+          "minLength": 1
+        },
+        "data": {
+          "not": {},
+          "description": "未绑定前禁止执行验证通过；SchemaRegistry 按已注册版本化 schema 替换为 oneOf/$ref"
+        }
+      },
+      "required": [
+        "schema_ref",
+        "data"
+      ],
+      "additionalProperties": false
+    },
+    "DatasetRef": {
+      "type": "object",
+      "description": "数据来源身份",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "revision": {
+          "type": "string",
+          "description": "不可变数据版本或内容 digest"
+        },
+        "split": {
+          "type": "string",
+          "description": "数据划分名"
+        },
+        "subset": {
+          "type": "string",
+          "description": "数据子集名；无子集为空"
+        }
+      },
+      "required": [
+        "id",
+        "revision",
+        "split",
+        "subset"
+      ],
+      "additionalProperties": false
+    },
+    "RuntimeSpec": {
+      "type": "object",
+      "description": "镜像候选；按 run、task、package 优先级选择，字段始终叫 image",
+      "properties": {
+        "image": {
+          "type": "string",
+          "description": "非空 OCI 镜像引用；执行计划必须锁定内容 digest",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "image"
+      ],
+      "additionalProperties": false
+    },
+    "TaskSpec": {
+      "type": "object",
+      "description": "唯一公开任务定义；可传给 Environment/Agent；不含评分材料及引用；runtime 仅声明样本运行资源候选，不选择后端",
+      "properties": {
+        "schema_version": {
+          "const": "vnext.3",
+          "description": "契约版本"
+        },
+        "task_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "dataset": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/DatasetRef"
+        },
+        "sample_id": {
+          "type": "string",
+          "description": "数据集内稳定样本 ID"
+        },
+        "input": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig",
+          "description": "公开业务字段，必须由 dataset package 声明其 schema"
+        },
+        "input_digest": {
+          "type": "string",
+          "description": "内容 SHA-256；必须对应实际字节",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "runtime": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/RuntimeSpec",
+          "description": "可选样本镜像候选，不是最终执行镜像"
+        }
+      },
+      "required": [
+        "schema_version",
+        "task_id",
+        "dataset",
+        "sample_id",
+        "input",
+        "input_digest"
+      ],
+      "additionalProperties": false
+    },
+    "ComponentSpec": {
+      "type": "object",
+      "description": "选择一个实现及其 schema 验证后的参数",
+      "properties": {
+        "implementation": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ComponentRef"
+        },
+        "config": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig"
+        }
+      },
+      "required": [
+        "implementation",
+        "config"
+      ],
+      "additionalProperties": false
+    },
+    "ToolBinding": {
+      "type": "object",
+      "description": "用户明确授权的一项模型可见工具；包含 SDK 原生工具，不自动合并默认工具",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "本次会话唯一工具名；绑定 SDK 工具时使用适配器声明的名字",
+          "minLength": 1
+        },
+        "implementation": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ComponentRef",
+          "description": "实际执行实现；原生状态工具也发布为有版本的包装组件"
+        },
+        "config": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig"
+        }
+      },
+      "required": [
+        "name",
+        "implementation",
+        "config"
+      ],
+      "additionalProperties": false
+    },
+    "ToolInterface": {
+      "type": "object",
+      "description": "工具实现可使用的一种标准接入接口；Agent 按自己声明的优先顺序选择首个兼容项",
+      "properties": {
+        "interface": {
+          "type": "string",
+          "description": "版本化接口标识，例如 mcp.v1 或 openhands_native.v1",
+          "minLength": 1
+        },
+        "adapter": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ComponentRef",
+          "description": "把该工具接口接入 Agent 的受管适配器"
+        },
+        "execution_scope": {
+          "type": "string",
+          "description": "工具由哪个受控执行入口承接；不是底层访问授权",
+          "enum": [
+            "agent_state",
+            "sandbox",
+            "external_service"
+          ]
+        },
+        "required_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "版本化运行能力标识"
+          },
+          "description": "该接入方式需要的 Worker 能力；不会授予文件、网络或宿主权限"
+        }
+      },
+      "required": [
+        "interface",
+        "adapter",
+        "execution_scope",
+        "required_capabilities"
+      ],
+      "additionalProperties": false
+    },
+    "ResolvedToolBinding": {
+      "type": "object",
+      "description": "预检后固定的实际工具绑定；Worker 初始化后必须核验 SDK 实际工具表与它一致",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "本次会话唯一模型可见工具名",
+          "minLength": 1
+        },
+        "implementation": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ResolvedComponent"
+        },
+        "adapter": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ResolvedComponent"
+        },
+        "config": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig"
+        },
+        "interface": {
+          "type": "string",
+          "description": "Agent 与工具共同支持并已锁定的版本化接入接口"
+        },
+        "execution_scope": {
+          "type": "string",
+          "description": "工具由哪个受控执行入口承接；不是底层访问授权",
+          "enum": [
+            "agent_state",
+            "sandbox",
+            "external_service"
+          ]
+        },
+        "required_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "版本化运行能力标识"
+          },
+          "description": "仅用于 Worker 兼容性匹配；不会授予文件、网络或宿主权限"
+        }
+      },
+      "required": [
+        "name",
+        "implementation",
+        "adapter",
+        "config",
+        "interface",
+        "execution_scope",
+        "required_capabilities"
+      ],
+      "additionalProperties": false
+    },
+    "Resources": {
+      "type": "object",
+      "description": "每个 episode 的资源上限；Worker 还需套管理员上限",
+      "properties": {
+        "cpu_cores": {
+          "type": "number",
+          "description": "CPU 核数",
+          "exclusiveMinimum": 0
+        },
+        "memory_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "内存字节数"
+        },
+        "process_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "最大进程数"
+        },
+        "disk_bytes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "工作区字节预算"
+        }
+      },
+      "required": [
+        "cpu_cores",
+        "memory_bytes",
+        "process_limit",
+        "disk_bytes"
+      ],
+      "additionalProperties": false
+    },
+    "BackendSpec": {
+      "type": "object",
+      "description": "由用户明确选择的任务后端；不读取数据集名称做选择",
+      "properties": {
+        "implementation": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ComponentRef"
+        },
+        "config": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig"
+        },
+        "resources": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/Resources"
+        }
+      },
+      "required": [
+        "implementation",
+        "config",
+        "resources"
+      ],
+      "additionalProperties": false
+    },
+    "GenerationConfig": {
+      "type": "object",
+      "description": "规范模型生成参数；额外 provider 参数须另注册 schema",
+      "properties": {
+        "temperature": {
+          "type": "number",
+          "description": "采样温度",
+          "minimum": 0
+        },
+        "top_p": {
+          "type": "number",
+          "description": "核采样概率",
+          "exclusiveMinimum": 0,
+          "maximum": 1
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "单次生成最大 token 数"
+        },
+        "stop": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "停止串"
+          },
+          "description": "停止字符串列表"
+        }
+      },
+      "required": [
+        "temperature",
+        "top_p",
+        "max_output_tokens",
+        "stop"
+      ],
+      "additionalProperties": false
+    },
+    "ModelSpec": {
+      "type": "object",
+      "description": "统一模型端点；训练时可指向 Bridge ModelGateway",
+      "properties": {
+        "endpoint": {
+          "type": "string",
+          "description": "端点地址，不包含密钥"
+        },
+        "credential_ref": {
+          "type": "string",
+          "description": "凭据引用；允许空表示不需要凭据"
+        },
+        "model_id": {
+          "type": "string",
+          "description": "模型身份"
+        },
+        "generation": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/GenerationConfig"
+        },
+        "source": {
+          "type": "string",
+          "description": "模型来源，模拟必须显式声明",
+          "enum": [
+            "real",
+            "simulated"
+          ]
+        },
+        "max_transport_retries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "仅尚未产生可用生成结果时的网络重试上限"
+        }
+      },
+      "required": [
+        "endpoint",
+        "credential_ref",
+        "model_id",
+        "generation",
+        "source",
+        "max_transport_retries"
+      ],
+      "additionalProperties": false
+    },
+    "Limits": {
+      "type": "object",
+      "description": "预算命名不可混用；所有值在 RunSpec 中显式提交",
+      "properties": {
+        "total_timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "从 Server 接收起的总预算，包含排队及评分"
+        },
+        "score_reserve_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "为结果收集、冻结及最终评分预留预算；三者共享总截止时间"
+        },
+        "max_generations": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "成功或部分完成的模型生成调用预算"
+        },
+        "max_tool_calls": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "接受执行的工具调用预算"
+        },
+        "max_environment_steps": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "环境转移次数预算；无状态任务可为 0"
+        },
+        "max_total_output_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "episode 累计生成 token 上限"
+        }
+      },
+      "required": [
+        "total_timeout_ms",
+        "score_reserve_ms",
+        "max_generations",
+        "max_tool_calls",
+        "max_environment_steps",
+        "max_total_output_tokens"
+      ],
+      "additionalProperties": false
+    },
+    "TrainingSpec": {
+      "type": "object",
+      "description": "训练接入规则，不是数据集参数",
+      "properties": {
+        "parallel_mode": {
+          "type": "string",
+          "description": "提交/消费策略",
+          "enum": [
+            "sync",
+            "one_step_off_policy",
+            "fully_async"
+          ]
+        },
+        "require_token_trace": {
+          "type": "boolean",
+          "description": "为 true 时缺少真实 token/logprob 必须拒绝进入训练"
+        },
+        "version_policy": {
+          "type": "string",
+          "description": "模型版本规则",
+          "enum": [
+            "fixed_episode",
+            "per_generation"
+          ]
+        },
+        "requested_policy_version": {
+          "type": "string",
+          "description": "期望版本，fixed_episode 必填；per_generation 可空"
+        },
+        "max_policy_lag": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "允许的版本落后量；需模型注册表提供可比较序号"
+        }
+      },
+      "required": [
+        "parallel_mode",
+        "require_token_trace",
+        "version_policy",
+        "requested_policy_version",
+        "max_policy_lag"
+      ],
+      "additionalProperties": false
+    },
+    "RetryPolicy": {
+      "type": "object",
+      "description": "episode 失败重试仅 Server 决定",
+      "properties": {
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "含首次在内的最大 attempt 数"
+        },
+        "initial_backoff_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "初始退避毫秒"
+        },
+        "max_backoff_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "退避上限毫秒"
+        }
+      },
+      "required": [
+        "max_attempts",
+        "initial_backoff_ms",
+        "max_backoff_ms"
+      ],
+      "additionalProperties": false
+    },
+    "RunSpec": {
+      "type": "object",
+      "description": "用户创建作业时提供的完整配置",
+      "properties": {
+        "schema_version": {
+          "const": "vnext.3",
+          "description": "契约版本"
+        },
+        "run_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "purpose": {
+          "type": "string",
+          "description": "作业用途",
+          "enum": [
+            "evaluation",
+            "training"
+          ]
+        },
+        "environment": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ComponentSpec"
+        },
+        "agent": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ComponentSpec",
+          "description": "智能体实现与参数；不提供 Agent 池或 placement；按 agent 角色校验接口和配置"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/ToolBinding"
+          },
+          "description": "完整显式工具绑定；空数组要求实际无模型可见工具，不兼容的 Agent 必须拒绝"
+        },
+        "scorer": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ComponentSpec",
+          "description": "本次运行唯一评分器；评测与后训练复用它产生的同一个 ScoreResult"
+        },
+        "backend": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/BackendSpec"
+        },
+        "model": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ModelSpec"
+        },
+        "limits": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/Limits"
+        },
+        "retry": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/RetryPolicy"
+        },
+        "trajectory_retention_days": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Server 保存权威轨迹的天数；只影响保留期，不改变记录内容"
+        },
+        "training": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/TrainingSpec",
+          "description": "仅 purpose=training 时必填；purpose=evaluation 时禁止出现"
+        },
+        "runtime": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/RuntimeSpec",
+          "description": "用户显式镜像选择，优先于 task 和 package"
+        }
+      },
+      "required": [
+        "schema_version",
+        "run_id",
+        "purpose",
+        "environment",
+        "agent",
+        "tools",
+        "scorer",
+        "backend",
+        "model",
+        "limits",
+        "retry",
+        "trajectory_retention_days"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "purpose": {
+                "const": "training"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "training"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "training"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "EpisodeRequest": {
+      "type": "object",
+      "description": "Bridge -> Server；不接受客户端指定 attempt 或 lease",
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "run_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "episode_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "task": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/TaskSpec"
+        },
+        "private_data": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig",
+          "description": "可选评分依据，随受控请求配对提交；大型测试使用内部 ArtifactRef；不得交给 Agent/Environment 或公开轨迹"
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "本次 episode 种子"
+        },
+        "sample_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "批次内位置，从 0 开始"
+        },
+        "batch_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      },
+      "required": [
+        "request_id",
+        "run_id",
+        "episode_id",
+        "task",
+        "seed",
+        "sample_index",
+        "batch_id"
+      ],
+      "additionalProperties": false
+    },
+    "BatchRequest": {
+      "type": "object",
+      "description": "提交一组 episode；batch ID 必须和各项一致",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "batch_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "episodes": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/EpisodeRequest"
+          },
+          "description": "非空任务列表，数量受服务器限制"
+        }
+      },
+      "required": [
+        "run_id",
+        "batch_id",
+        "episodes"
+      ],
+      "additionalProperties": false
+    },
+    "BatchReceipt": {
+      "type": "object",
+      "description": "提交确认不是执行成功",
+      "properties": {
+        "batch_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "episode_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "不透明身份标识；不得用其他实体的 ID 代填",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "description": "已接纳的 episode ID"
+        }
+      },
+      "required": [
+        "batch_id",
+        "episode_ids"
+      ],
+      "additionalProperties": false
+    },
+    "Lease": {
+      "type": "object",
+      "description": "Server 颁发，Worker 核验；不能由用户任务参数携带",
+      "properties": {
+        "lease_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "epoch": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "服务实例任期"
+        },
+        "expires_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟"
+        },
+        "token": {
+          "type": "string",
+          "description": "租约授权值；不得写入用户轨迹"
+        }
+      },
+      "required": [
+        "lease_id",
+        "epoch",
+        "expires_at_ms",
+        "token"
+      ],
+      "additionalProperties": false
+    },
+    "ExecutionPlan": {
+      "type": "object",
+      "description": "由请求与配置转换而来，不嵌套 EpisodeRequest/RunSpec；每项执行配置仅一处生效",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "episode_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "task": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/TaskSpec"
+        },
+        "private_data": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig",
+          "description": "可选评分依据，随受控请求配对提交；大型测试使用内部 ArtifactRef；不得交给 Agent/Environment 或公开轨迹"
+        },
+        "seed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "本次 episode 种子"
+        },
+        "purpose": {
+          "type": "string",
+          "description": "作业用途",
+          "enum": [
+            "evaluation",
+            "training"
+          ]
+        },
+        "model": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ModelSpec"
+        },
+        "limits": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/Limits"
+        },
+        "training": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/TrainingSpec",
+          "description": "仅 purpose=training 时必填；purpose=evaluation 时禁止出现"
+        },
+        "environment": {
+          "type": "object",
+          "description": "选择一个实现及其 schema 验证后的参数",
+          "properties": {
+            "implementation": {
+              "$ref": "urn:uenv:vnext:contracts#/$defs/ResolvedComponent"
+            },
+            "config": {
+              "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "additionalProperties": false
+        },
+        "agent": {
+          "type": "object",
+          "description": "选择一个实现及其 schema 验证后的参数",
+          "properties": {
+            "implementation": {
+              "$ref": "urn:uenv:vnext:contracts#/$defs/ResolvedComponent"
+            },
+            "config": {
+              "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "additionalProperties": false
+        },
+        "backend": {
+          "type": "object",
+          "description": "由用户明确选择的任务后端；不读取数据集名称做选择",
+          "properties": {
+            "implementation": {
+              "$ref": "urn:uenv:vnext:contracts#/$defs/ResolvedComponent"
+            },
+            "config": {
+              "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig"
+            },
+            "resources": {
+              "$ref": "urn:uenv:vnext:contracts#/$defs/Resources"
+            }
+          },
+          "required": [
+            "implementation",
+            "config",
+            "resources"
+          ],
+          "additionalProperties": false
+        },
+        "scorer": {
+          "type": "object",
+          "description": "选择一个实现及其 schema 验证后的参数",
+          "properties": {
+            "implementation": {
+              "$ref": "urn:uenv:vnext:contracts#/$defs/ResolvedComponent"
+            },
+            "config": {
+              "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig"
+            }
+          },
+          "required": [
+            "implementation",
+            "config"
+          ],
+          "additionalProperties": false
+        },
+        "attempt_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Server 生成；正常首次执行为 1，只有基础设施重试才递增，且不重选配置"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/ResolvedToolBinding"
+          },
+          "description": "唯一生效工具表；保留 RunSpec.tools 的字段名，锁定版本和执行路由"
+        },
+        "required_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "版本化运行能力标识"
+          },
+          "description": "完整运行能力需求，仅供 Worker 调度与兼容性核验；不是访问授权"
+        },
+        "internet_access": {
+          "type": "boolean",
+          "description": "Environment 是否需要访问公共互联网；Server 锁定，Backend 受控落实"
+        },
+        "runtime": {
+          "type": "object",
+          "description": "本条计划唯一生效的容器资源，不是待选择的候选",
+          "properties": {
+            "image": {
+              "type": "string",
+              "description": "唯一生效镜像；task.runtime 只是原始任务候选，Worker 不再消费它",
+              "pattern": "^[^@\\s]+@sha256:[0-9a-f]{64}$"
+            },
+            "image_source": {
+              "type": "string",
+              "description": "最终镜像的来源，用于审计",
+              "enum": [
+                "run",
+                "task",
+                "package"
+              ]
+            }
+          },
+          "required": [
+            "image",
+            "image_source"
+          ],
+          "additionalProperties": false
+        },
+        "plan_digest": {
+          "type": "string",
+          "description": "内容 SHA-256；必须对应实际字节",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "deadline_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "首次接纳时间加 limits.total_timeout_ms，重试不续期；Worker 唯一总截止时间"
+        }
+      },
+      "required": [
+        "run_id",
+        "episode_id",
+        "task",
+        "seed",
+        "purpose",
+        "model",
+        "limits",
+        "environment",
+        "agent",
+        "backend",
+        "scorer",
+        "attempt_id",
+        "tools",
+        "required_capabilities",
+        "internet_access",
+        "plan_digest",
+        "deadline_at_ms"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "purpose": {
+                "const": "training"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "training"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "training"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "DispatchRequest": {
+      "type": "object",
+      "description": "Server -> Worker；派生预算字段只能收紧 ExecutionPlan 中的限制",
+      "properties": {
+        "plan": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ExecutionPlan"
+        },
+        "lease": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/Lease"
+        },
+        "remaining_timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "派发时距离 plan.deadline_at_ms 的剩余上限；Worker 转为本机单调时钟"
+        },
+        "consumed_usage": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/Usage",
+          "description": "此前 attempt 已确认消耗的 episode 累计用量；首次派发全为 0"
+        }
+      },
+      "required": [
+        "plan",
+        "lease",
+        "remaining_timeout_ms",
+        "consumed_usage"
+      ],
+      "additionalProperties": false
+    },
+    "SessionRef": {
+      "type": "object",
+      "description": "资源 session 身份；不等于 task_id 或 sample_id",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "backend": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ResolvedComponent"
+        }
+      },
+      "required": [
+        "session_id",
+        "backend"
+      ],
+      "additionalProperties": false
+    },
+    "Observation": {
+      "type": "object",
+      "description": "模型可见观测；文本、多模态 artifact 与结构化数据可同时存在",
+      "properties": {
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/ContentPart"
+          },
+          "description": "有序原始可见内容"
+        },
+        "data": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig",
+          "description": "结构化可见状态，不含评分私有材料"
+        }
+      },
+      "required": [
+        "content"
+      ],
+      "additionalProperties": false
+    },
+    "Transition": {
+      "type": "object",
+      "description": "一次环境动作产生的状态转移，不等于模型调用或工具调用",
+      "properties": {
+        "observation": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/Observation"
+        },
+        "terminated": {
+          "type": "boolean",
+          "description": "环境到达自然终态"
+        },
+        "episode_truncated": {
+          "type": "boolean",
+          "description": "因外部预算等限制截断"
+        },
+        "environment_reward": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "可选环境原生信号，不自动成为训练 reward"
+        }
+      },
+      "required": [
+        "observation",
+        "terminated",
+        "episode_truncated"
+      ],
+      "additionalProperties": false
+    },
+    "Outcome": {
+      "type": "object",
+      "description": "统一执行结果；Agent 提交与环境收集共用，state 仅由 Environment 填写",
+      "properties": {
+        "final_answer": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/ContentPart"
+          },
+          "description": "可以为空；不要求所有任务产生文本答案"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef"
+          },
+          "description": "冻结的文件、补丁或其他产物"
+        },
+        "state": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig",
+          "description": "环境提供的评分状态快照，不发送给 Agent"
+        },
+        "termination_reason": {
+          "type": "string",
+          "description": "交互为何结束；in_progress 只用于过程快照，系统取消或失败由 EpisodeResult.execution_status 与 ErrorRecord 表达",
+          "enum": [
+            "in_progress",
+            "final_answer",
+            "environment_terminal",
+            "budget_exhausted"
+          ]
+        }
+      },
+      "required": [
+        "final_answer",
+        "artifacts",
+        "termination_reason"
+      ],
+      "additionalProperties": false
+    },
+    "ScoreInput": {
+      "type": "object",
+      "description": "Worker -> Python Scorer；只在 episode 结束后创建，不能发送到 Agent",
+      "properties": {
+        "task": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/TaskSpec"
+        },
+        "outcome": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/Outcome"
+        },
+        "trajectory_ref": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef"
+        },
+        "private_data": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig"
+        }
+      },
+      "required": [
+        "task",
+        "outcome",
+        "trajectory_ref"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "properties": {
+            "outcome": {
+              "properties": {
+                "termination_reason": {
+                  "not": {
+                    "const": "in_progress"
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "Metric": {
+      "type": "object",
+      "description": "一条 episode 的单个具名指标",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "如 accuracy/resolved/tests_passed"
+        },
+        "value": {
+          "type": "number",
+          "description": "有限数，拒绝 NaN/Infinity"
+        },
+        "unit": {
+          "type": "string",
+          "description": "如 ratio/count"
+        },
+        "direction": {
+          "type": "string",
+          "description": "优化方向",
+          "enum": [
+            "higher",
+            "lower",
+            "none"
+          ]
+        }
+      },
+      "required": [
+        "name",
+        "value",
+        "unit",
+        "direction"
+      ],
+      "additionalProperties": false
+    },
+    "ScoreResult": {
+      "type": "object",
+      "description": "统一评分结果；Python Scorer 返回同名 SDK 类的业务字段，Rust Worker 补全系统字段后才满足本传输 schema",
+      "properties": {
+        "status": {
+          "type": "string",
+          "description": "评分是否成功完成；系统维护，评分器不得填写；SDK 构造时为 None，最终传输按必填/可选规则校验",
+          "enum": [
+            "ok",
+            "error"
+          ]
+        },
+        "success": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "任务是否成功；无法确定时为 null"
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/Metric"
+          },
+          "description": "命名指标列表，名称唯一"
+        },
+        "reward": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "description": "本条 episode 的唯一奖励；评分成功时必须为有限数，评测展示与后训练复用该值"
+        },
+        "evidence": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef"
+          },
+          "description": "评分证据"
+        },
+        "scorer": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ResolvedComponent",
+          "description": "；系统维护，评分器不得填写；SDK 构造时为 None，最终传输按必填/可选规则校验"
+        },
+        "error": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ErrorRecord",
+          "description": "；系统维护，评分器不得填写；SDK 构造时为 None，最终传输按必填/可选规则校验"
+        }
+      },
+      "required": [
+        "status",
+        "success",
+        "metrics",
+        "reward",
+        "evidence",
+        "scorer"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "error"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "success": {
+                "type": "null"
+              },
+              "reward": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "error"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "reward": {
+                "type": "number"
+              }
+            },
+            "not": {
+              "required": [
+                "error"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "Usage": {
+      "type": "object",
+      "description": "本 episode 截至当前 attempt 的累计用量；不同操作独立计数，基础设施重试不清零",
+      "properties": {
+        "generation_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "模型生成调用次数"
+        },
+        "tool_call_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "工具执行次数"
+        },
+        "environment_step_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "环境转移次数"
+        },
+        "output_token_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "实际生成 token 数"
+        }
+      },
+      "required": [
+        "generation_count",
+        "tool_call_count",
+        "environment_step_count",
+        "output_token_count"
+      ],
+      "additionalProperties": false
+    },
+    "EpisodeResult": {
+      "type": "object",
+      "description": "Worker 产生候选结果，Server 校验租约后形成唯一权威终态",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "episode_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "attempt_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "有效 attempt"
+        },
+        "task_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "execution_status": {
+          "type": "string",
+          "description": "执行是否完成",
+          "enum": [
+            "completed",
+            "failed",
+            "timeout",
+            "cancelled"
+          ]
+        },
+        "score": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ScoreResult",
+          "description": "episode 结束后产生的唯一正式评分结果"
+        },
+        "outcome": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/Outcome"
+        },
+        "trajectory_ref": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef"
+        },
+        "usage": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/Usage"
+        },
+        "started_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟"
+        },
+        "finished_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟"
+        },
+        "error": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ErrorRecord"
+        },
+        "cleanup_status": {
+          "type": "string",
+          "description": "清理可独立重试，不改变任务评分",
+          "enum": [
+            "completed",
+            "pending",
+            "failed"
+          ]
+        }
+      },
+      "required": [
+        "run_id",
+        "episode_id",
+        "attempt_id",
+        "task_id",
+        "execution_status",
+        "usage",
+        "finished_at_ms",
+        "cleanup_status"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "execution_status": {
+                "const": "completed"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "started_at_ms",
+              "trajectory_ref",
+              "outcome",
+              "score"
+            ]
+          }
+        }
+      ]
+    },
+    "GenerationEvent": {
+      "type": "object",
+      "description": "一次模型调用的原始记录；逐调用保留版本和 token 对齐",
+      "properties": {
+        "generation_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "model_id": {
+          "type": "string",
+          "description": "实际模型"
+        },
+        "policy_version": {
+          "type": "string",
+          "description": "实际策略版本"
+        },
+        "parameter_version": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "实际参数版本序号"
+        },
+        "tokenizer": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ResolvedComponent"
+        },
+        "source": {
+          "type": "string",
+          "description": "真实或模拟",
+          "enum": [
+            "real",
+            "simulated"
+          ]
+        },
+        "messages": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/Message"
+          },
+          "description": "该次真实输入消息"
+        },
+        "response": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/ContentPart"
+          },
+          "description": "该次原始输出"
+        },
+        "output_token_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "本次实际生成 token 数；预算统计的唯一来源"
+        },
+        "input_token_ids": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "token ID"
+          },
+          "description": "真实输入 token 序列"
+        },
+        "output_token_ids": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "token ID"
+          },
+          "description": "真实生成 token 序列；存在时长度必须等于 output_token_count"
+        },
+        "output_logprobs": {
+          "type": "array",
+          "items": {
+            "type": "number",
+            "description": "token 对数概率"
+          },
+          "description": "长度必须等于 output_token_ids"
+        },
+        "loss_mask": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "enum": [
+              0,
+              1
+            ],
+            "description": "是否参与训练损失"
+          },
+          "description": "与生成 token 一一对应"
+        },
+        "finish_reason": {
+          "type": "string",
+          "description": "模型停止原因",
+          "enum": [
+            "stop",
+            "tool_calls",
+            "length",
+            "cancelled",
+            "error"
+          ]
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "模型调用耗时"
+        }
+      },
+      "required": [
+        "generation_id",
+        "model_id",
+        "source",
+        "messages",
+        "response",
+        "output_token_count",
+        "finish_reason",
+        "duration_ms"
+      ],
+      "additionalProperties": false,
+      "dependentRequired": {
+        "output_logprobs": [
+          "output_token_ids"
+        ],
+        "loss_mask": [
+          "output_token_ids"
+        ]
+      }
+    },
+    "ToolCall": {
+      "type": "object",
+      "description": "规范工具调用；动态 arguments 使用工具声明的 schema 递归验证",
+      "properties": {
+        "tool_call_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "generation_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "implementation": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ResolvedComponent"
+        },
+        "name": {
+          "type": "string",
+          "description": "ExecutionPlan.tools 中的唯一工具名；implementation 必须与该项一致"
+        },
+        "arguments": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "允许执行时间"
+        }
+      },
+      "required": [
+        "tool_call_id",
+        "generation_id",
+        "implementation",
+        "name",
+        "arguments",
+        "timeout_ms"
+      ],
+      "additionalProperties": false
+    },
+    "ToolResult": {
+      "type": "object",
+      "description": "工具结果不等于 episode 结果",
+      "properties": {
+        "tool_call_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "status": {
+          "type": "string",
+          "description": "工具状态",
+          "enum": [
+            "ok",
+            "error",
+            "timeout",
+            "cancelled"
+          ]
+        },
+        "content": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/ContentPart"
+          },
+          "description": "返回给 Agent 的内容"
+        },
+        "output_truncated": {
+          "type": "boolean",
+          "description": "仅标记工具返回预览是否截断"
+        },
+        "raw_output_ref": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef"
+        },
+        "error": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ErrorRecord"
+        }
+      },
+      "required": [
+        "tool_call_id",
+        "status",
+        "content",
+        "output_truncated"
+      ],
+      "additionalProperties": false
+    },
+    "EnvironmentTransition": {
+      "type": "object",
+      "description": "动作前事实与 Environment.step 返回值；动作后字段只在 Transition 中定义一次",
+      "properties": {
+        "environment_step_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "从 0 开始"
+        },
+        "observation_before": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/Observation",
+          "description": "动作前观测"
+        },
+        "action": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig"
+        },
+        "transition": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/Transition",
+          "description": "Environment.step 返回值的独立副本"
+        }
+      },
+      "required": [
+        "environment_step_index",
+        "observation_before",
+        "action",
+        "transition"
+      ],
+      "additionalProperties": false
+    },
+    "StateEvent": {
+      "type": "object",
+      "description": "基础生命周期事件",
+      "properties": {
+        "phase": {
+          "type": "string",
+          "description": "执行阶段",
+          "enum": [
+            "preparing",
+            "running",
+            "scoring",
+            "finalizing",
+            "cleaning"
+          ]
+        },
+        "session": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/SessionRef"
+        }
+      },
+      "required": [
+        "phase"
+      ],
+      "additionalProperties": false
+    },
+    "TrajectoryEvent": {
+      "type": "object",
+      "description": "所有数据集共享事件信封，事件 payload 按 kind 绑定",
+      "properties": {
+        "schema_version": {
+          "const": "vnext.3",
+          "description": "契约版本"
+        },
+        "event_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "run_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "episode_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "attempt_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "attempt 身份"
+        },
+        "task_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "由 Worker 事件收集器分配的连续序号，从 0 开始"
+        },
+        "occurred_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟"
+        },
+        "parent_event_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "kind": {
+          "type": "string",
+          "description": "事件类型",
+          "enum": [
+            "state",
+            "observation",
+            "generation",
+            "tool_call",
+            "tool_result",
+            "environment_transition",
+            "score",
+            "error",
+            "terminal"
+          ]
+        },
+        "payload": {
+          "description": "由 kind 决定的确定类型"
+        }
+      },
+      "required": [
+        "schema_version",
+        "event_id",
+        "run_id",
+        "episode_id",
+        "attempt_id",
+        "task_id",
+        "sequence",
+        "occurred_at_ms",
+        "kind",
+        "payload"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "state"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "urn:uenv:vnext:contracts#/$defs/StateEvent"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "observation"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "urn:uenv:vnext:contracts#/$defs/Observation"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "generation"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "urn:uenv:vnext:contracts#/$defs/GenerationEvent"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "tool_call"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "urn:uenv:vnext:contracts#/$defs/ToolCall"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "tool_result"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "urn:uenv:vnext:contracts#/$defs/ToolResult"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "environment_transition"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "urn:uenv:vnext:contracts#/$defs/EnvironmentTransition"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "score"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "urn:uenv:vnext:contracts#/$defs/ScoreResult"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "error"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "urn:uenv:vnext:contracts#/$defs/ErrorRecord"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": {
+                "const": "terminal"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "payload": {
+                "$ref": "urn:uenv:vnext:contracts#/$defs/TerminalEvent"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "TrajectoryManifest": {
+      "type": "object",
+      "description": "attempt 的轨迹索引；评分前快照与最终封存使用同一结构，终态事件不反向包含此索引",
+      "properties": {
+        "schema_version": {
+          "const": "vnext.3",
+          "description": "契约版本"
+        },
+        "run_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "episode_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "attempt_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "attempt 身份"
+        },
+        "task_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "event_segments": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef"
+          },
+          "description": "按 sequence 有序的 JSONL 事件分片"
+        },
+        "event_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "事件总数"
+        },
+        "trajectory_status": {
+          "type": "string",
+          "description": "清单所处阶段及最终记录完整性；不表示任务执行成功或失败",
+          "enum": [
+            "scoring_checkpoint",
+            "final_complete",
+            "final_partial"
+          ]
+        },
+        "created_at_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟"
+        }
+      },
+      "required": [
+        "schema_version",
+        "run_id",
+        "episode_id",
+        "attempt_id",
+        "task_id",
+        "event_segments",
+        "event_count",
+        "trajectory_status",
+        "created_at_ms"
+      ],
+      "additionalProperties": false
+    },
+    "TerminalEvent": {
+      "type": "object",
+      "description": "轨迹内终态摘要，避免与 EpisodeResult.trajectory_ref 形成 digest 环",
+      "properties": {
+        "execution_status": {
+          "type": "string",
+          "description": "终态",
+          "enum": [
+            "completed",
+            "failed",
+            "timeout",
+            "cancelled"
+          ]
+        },
+        "usage": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/Usage"
+        },
+        "error": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ErrorRecord"
+        }
+      },
+      "required": [
+        "execution_status",
+        "usage"
+      ],
+      "additionalProperties": false
+    },
+    "ToolSpec": {
+      "type": "object",
+      "description": "用户工具发布声明",
+      "properties": {
+        "implementation": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ComponentRef"
+        },
+        "entrypoint": {
+          "type": "string",
+          "description": "Python 函数或 ToolExecutor 的 module:symbol 入口"
+        },
+        "config_schema": {
+          "type": "string",
+          "description": "ToolExecutor 构造配置的精确 schema 标识"
+        },
+        "description": {
+          "type": "string",
+          "description": "给 Agent 的说明"
+        },
+        "interfaces": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/ToolInterface"
+          },
+          "description": "至少一种标准接入方式，接口名在本工具内唯一",
+          "minItems": 1
+        },
+        "input_schema": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef"
+        },
+        "output_schema": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef"
+        },
+        "side_effect": {
+          "type": "string",
+          "description": "副作用与重试依据",
+          "enum": [
+            "read_only",
+            "idempotent",
+            "non_idempotent"
+          ]
+        }
+      },
+      "required": [
+        "implementation",
+        "entrypoint",
+        "config_schema",
+        "description",
+        "interfaces",
+        "input_schema",
+        "output_schema",
+        "side_effect"
+      ],
+      "additionalProperties": false
+    },
+    "AgentManifest": {
+      "type": "object",
+      "description": "自定义 Agent 的发布声明；按接口复用工具，不逐个登记所有工具实现",
+      "properties": {
+        "implementation": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ComponentRef"
+        },
+        "entrypoint": {
+          "type": "string",
+          "description": "AgentRunner 的 module:Class 入口"
+        },
+        "config_schema": {
+          "type": "string",
+          "description": "AgentRunner 构造配置的精确 schema 标识"
+        },
+        "supported_interfaces": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "版本化工具接口；数组顺序就是兼容接口选择优先级"
+          },
+          "description": "至少一项且不重复",
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "required_tool_names": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "Agent 必须可见的内置工具名"
+          },
+          "description": "允许为空；空数组表示无必需工具",
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "implementation",
+        "entrypoint",
+        "config_schema",
+        "supported_interfaces",
+        "required_tool_names"
+      ],
+      "additionalProperties": false
+    },
+    "EntryPoints": {
+      "type": "object",
+      "description": "环境包 Python 入口，均为 module:Class",
+      "properties": {
+        "dataset_adapter": {
+          "type": "string",
+          "description": "原始行 -> PreparedSample"
+        },
+        "environment": {
+          "type": "string",
+          "description": "Environment 实现"
+        },
+        "scorer": {
+          "type": "string",
+          "description": "唯一单条 episode Scorer 实现；评测与后训练共用"
+        }
+      },
+      "required": [
+        "dataset_adapter",
+        "environment",
+        "scorer"
+      ],
+      "additionalProperties": false
+    },
+    "PackageManifest": {
+      "type": "object",
+      "description": "统一环境包，不绑定 agent 或 backend",
+      "properties": {
+        "runtime": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/RuntimeSpec",
+          "description": "数据集包默认镜像候选"
+        },
+        "id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "version": {
+          "type": "string",
+          "description": "精确版本"
+        },
+        "entrypoints": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/EntryPoints"
+        },
+        "task_schema": {
+          "type": "string",
+          "description": "任务业务字段 schema 标识"
+        },
+        "private_schema": {
+          "type": "string",
+          "description": "私有评分字段 schema 标识"
+        },
+        "config_schemas": {
+          "type": "object",
+          "description": "同一包内两个运行角色各自接受的配置 schema；角色名就是唯一索引",
+          "properties": {
+            "environment": {
+              "type": "string",
+              "description": "Environment.config 接受的 schema 标识"
+            },
+            "scorer": {
+              "type": "string",
+              "description": "Scorer.config 接受的 schema 标识"
+            }
+          },
+          "required": [
+            "environment",
+            "scorer"
+          ],
+          "additionalProperties": false
+        },
+        "internet_access": {
+          "type": "boolean",
+          "description": "Environment 是否需要公共互联网；数据行、RunSpec、Agent 和 Tool 不得覆盖"
+        },
+        "required_capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "运行能力名"
+          },
+          "description": "部署所需的 Worker 功能；不写 Docker/OpenHands 名称，也不授予访问权限"
+        },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef"
+          },
+          "description": "代码 wheel 和显式声明的运行文件；镜像只由 runtime.image 引用"
+        },
+        "provided_tools": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/ToolSpec"
+          },
+          "description": "包可提供的工具声明；本次启用项只由 RunSpec.tools 决定"
+        },
+        "schemas": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef"
+          },
+          "description": "包发布的带 $id 的 JSON Schema，注册前校验 digest"
+        }
+      },
+      "required": [
+        "id",
+        "version",
+        "entrypoints",
+        "task_schema",
+        "config_schemas",
+        "internet_access",
+        "required_capabilities",
+        "artifacts",
+        "provided_tools",
+        "schemas"
+      ],
+      "additionalProperties": false
+    },
+    "WorkerRegistration": {
+      "type": "object",
+      "description": "Worker 声明能力，供 Server 匹配",
+      "properties": {
+        "worker_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "endpoint": {
+          "type": "string",
+          "description": "Worker 地址"
+        },
+        "capacity": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "可同时承载的 episode 槽位总数；不同于 CPU/内存/存储 resource_capacity"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "能力名"
+          },
+          "description": "运行能力"
+        },
+        "components": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/ResolvedComponent"
+          },
+          "description": "已安装可执行组件；包括后端，不另设后端清单"
+        },
+        "resource_capacity": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/Resources",
+          "description": "Worker 可管理的 CPU/内存/存储总量；BackendSpec.resources 是单个 episode 的资源申请"
+        }
+      },
+      "required": [
+        "worker_id",
+        "endpoint",
+        "capacity",
+        "capabilities",
+        "components",
+        "resource_capacity"
+      ],
+      "additionalProperties": false
+    },
+    "Heartbeat": {
+      "type": "object",
+      "description": "控制面健康与容量快照",
+      "properties": {
+        "worker_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "timestamp_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟"
+        },
+        "active_leases": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "不透明身份标识；不得用其他实体的 ID 代填",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "description": "活跃 lease ID"
+        },
+        "available_slots": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "当前可用 episode 槽位；由 WorkerRegistration.capacity 减去已占用槽位得到，不是第二份总容量"
+        },
+        "draining": {
+          "type": "boolean",
+          "description": "不再接受新任务"
+        }
+      },
+      "required": [
+        "worker_id",
+        "timestamp_ms",
+        "active_leases",
+        "available_slots",
+        "draining"
+      ],
+      "additionalProperties": false
+    },
+    "CancelRequest": {
+      "type": "object",
+      "description": "Server 或客户端取消请求；取消意图具有幂等性",
+      "properties": {
+        "request_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "episode_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "reason": {
+          "type": "string",
+          "description": "取消原因"
+        }
+      },
+      "required": [
+        "request_id",
+        "episode_id",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "ResultReport": {
+      "type": "object",
+      "description": "Worker 重传结果；Server 按 attempt+lease 去重和排除旧结果",
+      "properties": {
+        "lease": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/Lease"
+        },
+        "result": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/EpisodeResult"
+        }
+      },
+      "required": [
+        "lease",
+        "result"
+      ],
+      "additionalProperties": false
+    },
+    "Ack": {
+      "type": "object",
+      "description": "提交/上报/取消的确认",
+      "properties": {
+        "accepted": {
+          "type": "boolean",
+          "description": "是否接受"
+        },
+        "code": {
+          "type": "string",
+          "description": "OK/STALE_ATTEMPT/CONFLICT 等稳定码"
+        },
+        "message": {
+          "type": "string",
+          "description": "说明"
+        }
+      },
+      "required": [
+        "accepted",
+        "code",
+        "message"
+      ],
+      "additionalProperties": false
+    },
+    "CursorRequest": {
+      "type": "object",
+      "description": "查询或订阅结果/事件",
+      "properties": {
+        "run_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "episode_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "after_sequence": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "已接收的最后序号"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "返回上限"
+        }
+      },
+      "required": [
+        "run_id",
+        "limit"
+      ],
+      "additionalProperties": false
+    },
+    "ExecRequest": {
+      "type": "object",
+      "description": "任务后端执行命令，不包含数据集字段",
+      "properties": {
+        "session_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "单个参数，不经过隐式 shell 拼接"
+          },
+          "description": "参数列表"
+        },
+        "cwd": {
+          "type": "string",
+          "description": "沙箱内路径"
+        },
+        "environment_variables": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "命令环境变量映射；密钥由受控注入，不入轨迹"
+        },
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "命令预算"
+        }
+      },
+      "required": [
+        "session_id",
+        "argv",
+        "cwd",
+        "environment_variables",
+        "timeout_ms"
+      ],
+      "additionalProperties": false
+    },
+    "ExecResult": {
+      "type": "object",
+      "description": "底层命令结果",
+      "properties": {
+        "exit_code": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "进程退出码；信号退出另记 error"
+        },
+        "stdout_ref": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef"
+        },
+        "stderr_ref": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef"
+        },
+        "duration_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "耗时"
+        },
+        "error": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ErrorRecord"
+        }
+      },
+      "required": [
+        "exit_code",
+        "stdout_ref",
+        "stderr_ref",
+        "duration_ms"
+      ],
+      "additionalProperties": false
+    },
+    "FrameworkSample": {
+      "type": "object",
+      "description": "Bridge 将统一轨迹映射为训练框架输入的规范中间结构",
+      "properties": {
+        "episode_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "attempt_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "attempt"
+        },
+        "generation_event_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "不透明身份标识；不得用其他实体的 ID 代填",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "description": "使用的模型生成事件，保持顺序"
+        },
+        "reward": {
+          "type": "number",
+          "description": "从唯一 ScoreResult.reward 复制的训练标量，不重新计算"
+        },
+        "policy_versions": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "策略版本"
+          },
+          "description": "与 generation_event_ids 一一对应"
+        },
+        "trajectory_ref": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef"
+        }
+      },
+      "required": [
+        "episode_id",
+        "attempt_id",
+        "generation_event_ids",
+        "reward",
+        "policy_versions",
+        "trajectory_ref"
+      ],
+      "additionalProperties": false
+    },
+    "HarnessRequest": {
+      "type": "object",
+      "description": "Scorer -> Worker 提供的 harness 执行能力",
+      "properties": {
+        "outcome": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/Outcome",
+          "description": "与 ScoreInput.outcome 相同的完整评分快照，不另命名或只传 artifacts"
+        },
+        "private_data": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig",
+          "description": "原样传入；唯一评测配置在 data.evaluation_plan，不新增顶层副本"
+        },
+        "remaining_timeout_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "剩余预算"
+        }
+      },
+      "required": [
+        "outcome",
+        "private_data",
+        "remaining_timeout_ms"
+      ],
+      "additionalProperties": false
+    },
+    "HarnessResult": {
+      "type": "object",
+      "description": "harness 结果，候选失败和 harness 错误不同",
+      "properties": {
+        "status": {
+          "type": "string",
+          "description": "评测程序是否正常完成",
+          "enum": [
+            "ok",
+            "error"
+          ]
+        },
+        "success": {
+          "type": [
+            "boolean",
+            "null"
+          ],
+          "description": "正常完成时必须为布尔值"
+        },
+        "tests_run": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "实际测试数"
+        },
+        "tests_passed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "通过数量"
+        },
+        "report_ref": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef"
+        },
+        "metrics": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/Metric"
+          },
+          "description": "可选的详细指标"
+        },
+        "error": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ErrorRecord"
+        }
+      },
+      "required": [
+        "status",
+        "success",
+        "tests_run",
+        "tests_passed",
+        "report_ref"
+      ],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "ok"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "success": {
+                "type": "boolean"
+              }
+            },
+            "not": {
+              "required": [
+                "error"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "error"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "success": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "error"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

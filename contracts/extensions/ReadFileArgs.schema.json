@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uenv://schemas/vnext/ReadFileArgs",
+  "type": "object",
+  "description": "读取工具参数",
+  "properties": {
+    "path": {
+      "type": "string",
+      "description": "工作区内路径"
+    }
+  },
+  "required": [
+    "path"
+  ],
+  "additionalProperties": false
+}

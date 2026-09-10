@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uenv://packages/datasets/swe-smith/1.0.0/SweSmithInput",
+  "title": "SweSmithInput",
+  "description": "Model-visible SWE-smith task.",
+  "type": "object",
+  "properties": {
+    "instruction": {
+      "type": "string",
+      "description": "Repository repair request",
+      "minLength": 1
+    },
+    "repo": {
+      "type": "string",
+      "description": "Repository identity",
+      "minLength": 1
+    },
+    "base_commit": {
+      "type": "string",
+      "description": "Exact starting commit",
+      "minLength": 1
+    },
+    "workspace_path": {
+      "type": "string",
+      "description": "Sandbox workspace path",
+      "minLength": 1
+    },
+    "runtime_assets": {
+      "type": "array",
+      "items": {
+        "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef"
+      },
+      "description": "Versioned repository and dependency inputs"
+    }
+  },
+  "required": [
+    "instruction",
+    "repo",
+    "base_commit",
+    "workspace_path",
+    "runtime_assets"
+  ],
+  "additionalProperties": false
+}

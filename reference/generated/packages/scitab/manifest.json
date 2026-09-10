@@ -1,0 +1,33 @@
+{
+  "id": "datasets/scitab",
+  "version": "1.0.0",
+  "entrypoints": {
+    "dataset_adapter": "scitab.dataset_adapter:ScitabAdapter",
+    "environment": "scitab.environment:ScitabEnvironment",
+    "scorer": "scitab.scorer:ScitabScorer"
+  },
+  "task_schema": "uenv://packages/datasets/scitab/1.0.0/ScitabInput",
+  "config_schemas": {
+    "environment": "uenv://schemas/vnext/EmptyConfig",
+    "scorer": "uenv://schemas/vnext/EmptyConfig"
+  },
+  "internet_access": false,
+  "required_capabilities": [],
+  "artifacts": [],
+  "provided_tools": [],
+  "schemas": [
+    {
+      "uri": "generated/packages/scitab/schemas/ScitabInput.schema.json",
+      "digest": "sha256:d57fa6b6fbe020558871b15520ba18b5cb5a9cb61fec80ae7550e71b0d27c5d2",
+      "size_bytes": 1195,
+      "media_type": "application/schema+json"
+    },
+    {
+      "uri": "generated/packages/scitab/schemas/ScitabPrivateData.schema.json",
+      "digest": "sha256:d31e88f5f0440a9a9deee3daf03d6cedb31a4857ea9b76bacda51cae89517097",
+      "size_bytes": 427,
+      "media_type": "application/schema+json"
+    }
+  ],
+  "private_schema": "uenv://packages/datasets/scitab/1.0.0/ScitabPrivateData"
+}

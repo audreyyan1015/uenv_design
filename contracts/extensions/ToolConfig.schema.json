@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uenv://schemas/vnext/ToolConfig",
+  "type": "object",
+  "description": "公共命令/文件工具参数",
+  "properties": {
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "工具执行预算，受 episode 总 deadline 限制"
+    },
+    "max_preview_bytes": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "返回消息预览长度；原始输出另存 artifact"
+    }
+  },
+  "required": [
+    "timeout_ms",
+    "max_preview_bytes"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,11 @@
+id: datasets/pubmedqa
+version: 1.0.0
+entrypoints:
+  dataset_adapter: pubmedqa.dataset_adapter:PubmedqaAdapter
+  environment: pubmedqa.environment:PubmedqaEnvironment
+  scorer: pubmedqa.scorer:PubmedqaScorer
+models:
+  input: pubmedqa.models:PubmedqaInput
+  private_data: pubmedqa.models:PubmedqaPrivateData
+internet_access: false
+required_capabilities: []

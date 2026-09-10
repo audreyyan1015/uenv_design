@@ -1,0 +1,83 @@
+# 本地验证结果与边界
+
+验证日期：2026-09-10。验证对象仅为 `architecture-review-0905/design`。
+
+## 已执行
+
+从 design 目录执行；wheel 检查使用带 setuptools/wheel 的本机 Python，在临时源码副本中构建。
+
+```text
+python -B -X utf8 build_contracts.py
+python -B -X utf8 build_examples.py
+python -B -X utf8 build_module_map.py
+python -B -X utf8 validate_design.py
+cargo fmt --all --manifest-path Cargo.toml -- --check
+cargo clippy --offline --locked --manifest-path Cargo.toml --all-targets -- -D warnings
+python -m pip wheel --no-cache-dir --no-index --no-deps --no-build-isolation <reference package>
+```
+
+结果：
+
+- 生成 60 个公共类型和 11 个内置组件扩展 schema；另从九个数据集包的 `models.py` 生成 18 个包 schema。PackageMetadata 已删除；PackageManifest 不含 metadata 或作者 schema_version。
+- 九个数据集都使用 `dataset.yaml + pyproject.toml + src/<package> + tests` 结构；公开运行配置位于 `reference/runs`，生成的 manifest、内部请求与九个 `execution_plan.json` 位于 `reference/generated`。
+- 生成 138 个目标模块职责条目，其中 11 个是统一核心 proto 文件职责；补齐 AgentRuntime 与统一样本准备函数的文件职责。
+- 28 个 Python 契约、包结构、模型生成、扩展与评分测试通过。
+- 21 个 Rust 控制链测试通过。
+- Rust 格式检查和 `clippy -D warnings` 通过。
+- SDK、共享评分规则和九个数据集包共 11 个 Python wheel 离线构建成功；在系统临时目录的源码副本中构建，确认 dataset_adapter.py 进入 wheel、本地 tests 不进入 wheel。此项只验证打包，不代表安装后的生产运行通过。
+- `validate_design.py` 的第 29 个测试运行整套 Rust 测试，最终输出 `Ran 29 tests ... OK`。
+
+## 已验证的关键约束
+
+- 无 tests/ 的作者包仍可加载并生成 manifest；Python 构建版本与包声明不一致时拒绝。
+- 模型登记支持可选角色配置、动作、观测与状态；配置 schema 被实际用于参数校验，嵌套模型生成、校验和恢复通过回归检查。
+- 字符串布尔值、未知模型角色、重复能力名、嵌套重复控制字段及不匹配的角色 manifest 均明确拒绝。
+- Agent 交互时间用完后，finalize 使用评分预留时间，仍能完成一次评分；评分截止时间保持原值，不重新延长。
+
+- 数据集 YAML、PackageManifest 和 ExecutionPlan 不含额外 UEnv `dependencies` 列表；Python 校验拒绝重新提交该字段，Rust 参考不再递归解析组件依赖。Python/Cargo 安装依赖保留。
+
+- 九个数据集各自声明 Adapter、Environment、Scorer，共 27 个直接子类。
+- 九个数据集业务字段只定义在各包 `models.py`；中央 `build_contracts.py` 和通用 `build_examples.py` 不包含数据集模型或名称。生成 schema 与模型类型标注逐字段一致。
+- 九份公开 `run.yaml` 都不含 `schema_ref`、episode_id、attempt_id、lease 或 digest；组件目录在提交边界把公开 config 自动封装成内部 RunSpec。
+- 数据集作者目录不保存 manifest、TaskSpec、EpisodeRequest 或 ExecutionPlan；这些对象只出现在独立生成目录。
+- 九个包声明与 PackageManifest 均拒绝 metadata、schema_version、dependencies；公开 run.yaml 的 schema_version 由提交边界生成。
+- 文档规定字段查询按作者任务过滤，已有测试检查这些文档约束；uenv describe CLI 尚未实现，不能把文档检查当成查询功能验收。
+- 所有 Scorer 直接继承 `Scorer`，所有 Environment 直接继承 `Environment`。
+- 数据集 manifest 只有 Adapter、Environment、Scorer 三个入口；Scorer 只处理单条 episode，系统查询层只从已保存结果生成通用运行统计。
+- Python 参考中不再存在 `EpisodeRuntime`、Python 计划解析器、Python 权威工具路由或 Python Backend 基类。
+- 九个示例计划均可由同一个 Rust `PlanResolver` 重建为完全相同的 JSON。
+- Worker 的参考执行入口只有 `EpisodeSupervisor.execute(dispatch, ports...)`；逐 episode 配置只从 `dispatch.plan` 读取，lease、remaining_timeout_ms、consumed_usage 只提供派发授权与累计运行状态。
+- `ScoreInput` 不复制 remaining_timeout_ms；Python Scorer 只从 `ScoringContext` 读取 Rust Supervisor 的当前剩余预算。
+- `purpose=training` 必须且只能搭配 training 配置，`purpose=evaluation` 禁止携带 training。
+- `RunSpec.scorer` 解析为 `ExecutionPlan.scorer`，正式结果只写 `EpisodeResult.score`。
+- Python Scorer 不能填写 `status`、`scorer`、`error`；Rust 负责补全和错误转换。
+- `ScoreInput.trajectory_ref` 与最终 `trajectory_ref` 都引用同一 `TrajectoryManifest` 根结构。
+- harness 只在 `private_data.data.evaluation_plan.harness` 选择，并由 Rust 解析器按组件规则锁定。
+- 预算预留、模型调用计数、工具调用计数、环境步数和输出 token 计数由 Rust 执行；DispatchRequest.consumed_usage 会延续跨 attempt 的累计计数。
+- Agent、Backend 和本次启用的工具列表不进入数据集 manifest；数据集包只能用 `provided_tools` 声明可提供项。本次选择来自 RunSpec，解析后只有 ExecutionPlan 生效。
+- AgentHost、EnvironmentHost、ScorerHost 和 ToolHost 是独立权限端口；失败路径仍关闭三类 Python host、ToolHost 与 Backend。
+- 取消发生在资源创建后时仍进入同一清理路径。
+- Environment.step 只能通过 AgentRuntime 的单一入口调用，Rust 在动作副作用前检查并预占预算，再校验和记录 Transition。
+- Backend 只创建任务 session；ToolHost 从唯一 `ExecutionPlan.tools` 绑定实际路由。工具执行失败时仍写入与 ToolCall 同 id 的 ToolResult(error)。
+- ToolHost 的实际可路由表和 AgentHost 的实际模型可见表都必须精确等于 `ExecutionPlan.tools`；隐藏原生工具和缺失适配器都会在 reset 前失败并清理。
+- 评分器异常后，冻结 Outcome 与 `status=error` 的同一个 ScoreResult 仍保存在 EpisodeResult。
+- 模型、工具、环境错误保留明确的 phase、operation_id 和 retryable；评分超时不会被改写为笼统的评分失败。
+- 轨迹序号由 Rust 连续分配，私有材料和覆盖它的 plan_digest 不进入公开轨迹。
+- 轨迹事件按 UTF-8 JSONL 序列化后的字节大小分片，单片上限为系统内部固定的 4 MiB；只在完整事件之间切分，并标记 `application/x-ndjson`。
+- `TrajectoryManifest.trajectory_status` 用 scoring_checkpoint、final_complete、final_partial 分开表达评分快照和最终记录完整性，不再复用 complete 布尔值。
+- 任一事件或 checkpoint 写入失败都会使最终轨迹标记为 final_partial；已形成的 Outcome/ScoreResult 不因 score 事件写入失败而丢失。
+- Outcome.termination_reason 是唯一交互结束原因；EpisodeResult/TerminalEvent 不再复制。WorkerRegistration.components 是包括 Backend 在内的唯一安装清单。
+- WorkerRegistration.capacity 表示总并发槽位，Heartbeat.available_slots 表示当前剩余槽位，resource_capacity 表示总资源，BackendSpec.resources 表示单 episode 申请。
+- Agent 池字段、`env_type` 和操作系统底层配置字段均被公共 schema 拒绝。
+
+## 没有验证
+
+- 远端 Rust Server/Worker 已迁移到该设计。
+- 真实 gRPC、lease、事务/outbox、持久 attempt 账本与崩溃恢复。
+- 真实 Process、Docker、Podman 的隔离、取消和资源回收。
+- OpenHands 原生工具、MCP 转换和真实模型服务。
+- 官方 SWE/DSCodeBench harness 与文本评分器的官方差分。
+- Hub 发布、数据分片、鉴权、缓存和生产部署。
+- 大规模并发、性能或安全隔离。
+
+因此这次结果证明的是“设计契约和本地控制参考一致”，不能表述为“生产迁移完成”或“benchmark 通过”。

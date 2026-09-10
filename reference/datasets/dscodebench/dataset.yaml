@@ -1,0 +1,13 @@
+id: datasets/dscodebench
+version: 1.0.0
+entrypoints:
+  dataset_adapter: dscodebench.dataset_adapter:DscodebenchAdapter
+  environment: dscodebench.environment:DscodebenchEnvironment
+  scorer: dscodebench.scorer:DscodebenchScorer
+models:
+  input: dscodebench.models:DscodebenchInput
+  private_data: dscodebench.models:DscodebenchPrivateData
+internet_access: false
+required_capabilities:
+- exec.v1
+- filesystem.v1

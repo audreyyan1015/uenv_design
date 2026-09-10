@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uenv://packages/datasets/scitab/1.0.0/ScitabInput",
+  "title": "ScitabInput",
+  "description": "Model-visible SciTab claim and table.",
+  "type": "object",
+  "properties": {
+    "claim": {
+      "type": "string",
+      "description": "Claim to verify",
+      "minLength": 1
+    },
+    "paper": {
+      "type": "string",
+      "description": "Paper title"
+    },
+    "paper_id": {
+      "type": "string",
+      "description": "Source paper identifier"
+    },
+    "table_id": {
+      "type": "string",
+      "description": "Source table identifier"
+    },
+    "caption": {
+      "type": "string",
+      "description": "Table caption"
+    },
+    "columns": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Table column names"
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        }
+      },
+      "description": "Table rows"
+    }
+  },
+  "required": [
+    "claim",
+    "paper",
+    "paper_id",
+    "table_id",
+    "caption",
+    "columns",
+    "rows"
+  ],
+  "additionalProperties": false
+}

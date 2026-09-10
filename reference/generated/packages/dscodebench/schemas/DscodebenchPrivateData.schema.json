@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uenv://packages/datasets/dscodebench/1.0.0/DscodebenchPrivateData",
+  "title": "DscodebenchPrivateData",
+  "description": "Scorer-only DSCodeBench tests and evaluation plan.",
+  "type": "object",
+  "properties": {
+    "tests": {
+      "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef",
+      "description": "Versioned test artifact"
+    },
+    "reference_solution": {
+      "anyOf": [
+        {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/ArtifactRef"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Optional reference solution",
+      "default": null
+    },
+    "num_tests": {
+      "type": "integer",
+      "description": "Number of tests",
+      "minimum": 1
+    },
+    "test_seed": {
+      "type": "integer",
+      "description": "Test sampling seed",
+      "minimum": 0
+    },
+    "evaluation_plan": {
+      "$ref": "uenv://schemas/vnext/EvaluationPlan",
+      "description": "Only harness execution configuration"
+    }
+  },
+  "required": [
+    "tests",
+    "num_tests",
+    "test_seed",
+    "evaluation_plan"
+  ],
+  "additionalProperties": false
+}

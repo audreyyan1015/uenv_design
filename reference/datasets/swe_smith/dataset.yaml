@@ -1,0 +1,13 @@
+id: datasets/swe-smith
+version: 1.0.0
+entrypoints:
+  dataset_adapter: swe_smith.dataset_adapter:SweSmithAdapter
+  environment: swe_smith.environment:SweSmithEnvironment
+  scorer: swe_smith.scorer:SweSmithScorer
+models:
+  input: swe_smith.models:SweSmithInput
+  private_data: swe_smith.models:SweSmithPrivateData
+internet_access: false
+required_capabilities:
+- exec.v1
+- filesystem.v1

@@ -1,0 +1,33 @@
+{
+  "id": "datasets/olymmath",
+  "version": "1.0.0",
+  "entrypoints": {
+    "dataset_adapter": "olymmath.dataset_adapter:OlymmathAdapter",
+    "environment": "olymmath.environment:OlymmathEnvironment",
+    "scorer": "olymmath.scorer:OlymmathScorer"
+  },
+  "task_schema": "uenv://packages/datasets/olymmath/1.0.0/OlymmathInput",
+  "config_schemas": {
+    "environment": "uenv://schemas/vnext/EmptyConfig",
+    "scorer": "uenv://schemas/vnext/EmptyConfig"
+  },
+  "internet_access": false,
+  "required_capabilities": [],
+  "artifacts": [],
+  "provided_tools": [],
+  "schemas": [
+    {
+      "uri": "generated/packages/olymmath/schemas/OlymmathInput.schema.json",
+      "digest": "sha256:156631677e9cf6570bcebb1c44f7c9bf08ffe2a006dce865eb7f49e65e2a8587",
+      "size_bytes": 857,
+      "media_type": "application/schema+json"
+    },
+    {
+      "uri": "generated/packages/olymmath/schemas/OlymmathPrivateData.schema.json",
+      "digest": "sha256:bd2e7e5aa5b681a1cfe6398fd3264eb2b0481cb31bac988b2e826ce8cf5aae5a",
+      "size_bytes": 447,
+      "media_type": "application/schema+json"
+    }
+  ],
+  "private_schema": "uenv://packages/datasets/olymmath/1.0.0/OlymmathPrivateData"
+}

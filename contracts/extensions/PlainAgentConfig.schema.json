@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uenv://schemas/vnext/PlainAgentConfig",
+  "type": "object",
+  "description": "轻量智能体配置",
+  "properties": {
+    "history_policy": {
+      "type": "string",
+      "description": "模型上下文策略",
+      "enum": [
+        "full",
+        "last_generation"
+      ]
+    },
+    "system_prompt": {
+      "type": "string",
+      "description": "智能体系统提示词；空表示不额外添加"
+    }
+  },
+  "required": [
+    "history_policy",
+    "system_prompt"
+  ],
+  "additionalProperties": false
+}

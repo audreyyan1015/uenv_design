@@ -1,0 +1,33 @@
+{
+  "id": "datasets/gsm8k",
+  "version": "1.0.0",
+  "entrypoints": {
+    "dataset_adapter": "gsm8k.dataset_adapter:Gsm8kAdapter",
+    "environment": "gsm8k.environment:Gsm8kEnvironment",
+    "scorer": "gsm8k.scorer:Gsm8kScorer"
+  },
+  "task_schema": "uenv://packages/datasets/gsm8k/1.0.0/Gsm8kInput",
+  "config_schemas": {
+    "environment": "uenv://schemas/vnext/EmptyConfig",
+    "scorer": "uenv://schemas/vnext/EmptyConfig"
+  },
+  "internet_access": false,
+  "required_capabilities": [],
+  "artifacts": [],
+  "provided_tools": [],
+  "schemas": [
+    {
+      "uri": "generated/packages/gsm8k/schemas/Gsm8kInput.schema.json",
+      "digest": "sha256:1068a6923c9f0516d3e513b500b23898de05d3f8dbedb7e13d84a877c45a9462",
+      "size_bytes": 425,
+      "media_type": "application/schema+json"
+    },
+    {
+      "uri": "generated/packages/gsm8k/schemas/Gsm8kPrivateData.schema.json",
+      "digest": "sha256:bc89475df79854cf4b0fc3c60eef250d65abe7f510f034270b7751dfe7970d0f",
+      "size_bytes": 433,
+      "media_type": "application/schema+json"
+    }
+  ],
+  "private_schema": "uenv://packages/datasets/gsm8k/1.0.0/Gsm8kPrivateData"
+}

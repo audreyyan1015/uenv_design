@@ -1,0 +1,33 @@
+{
+  "id": "datasets/pubmedqa",
+  "version": "1.0.0",
+  "entrypoints": {
+    "dataset_adapter": "pubmedqa.dataset_adapter:PubmedqaAdapter",
+    "environment": "pubmedqa.environment:PubmedqaEnvironment",
+    "scorer": "pubmedqa.scorer:PubmedqaScorer"
+  },
+  "task_schema": "uenv://packages/datasets/pubmedqa/1.0.0/PubmedqaInput",
+  "config_schemas": {
+    "environment": "uenv://schemas/vnext/EmptyConfig",
+    "scorer": "uenv://schemas/vnext/EmptyConfig"
+  },
+  "internet_access": false,
+  "required_capabilities": [],
+  "artifacts": [],
+  "provided_tools": [],
+  "schemas": [
+    {
+      "uri": "generated/packages/pubmedqa/schemas/PubmedqaInput.schema.json",
+      "digest": "sha256:96158a9366b4cc275d7557f448a4a04737b9d54e7e7903f5ce64c8680a781588",
+      "size_bytes": 604,
+      "media_type": "application/schema+json"
+    },
+    {
+      "uri": "generated/packages/pubmedqa/schemas/PubmedqaPrivateData.schema.json",
+      "digest": "sha256:06ac300168fa62bed49aa9122cd070ea25295011333e1a6a47e73a0be3b196d8",
+      "size_bytes": 435,
+      "media_type": "application/schema+json"
+    }
+  ],
+  "private_schema": "uenv://packages/datasets/pubmedqa/1.0.0/PubmedqaPrivateData"
+}

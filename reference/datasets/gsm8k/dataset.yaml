@@ -1,0 +1,11 @@
+id: datasets/gsm8k
+version: 1.0.0
+entrypoints:
+  dataset_adapter: gsm8k.dataset_adapter:Gsm8kAdapter
+  environment: gsm8k.environment:Gsm8kEnvironment
+  scorer: gsm8k.scorer:Gsm8kScorer
+models:
+  input: gsm8k.models:Gsm8kInput
+  private_data: gsm8k.models:Gsm8kPrivateData
+internet_access: false
+required_capabilities: []

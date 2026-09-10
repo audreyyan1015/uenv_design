@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uenv://packages/datasets/pubmedqa/1.0.0/PubmedqaPrivateData",
+  "title": "PubmedqaPrivateData",
+  "description": "Scorer-only PubMedQA label.",
+  "type": "object",
+  "properties": {
+    "answer": {
+      "type": "string",
+      "description": "Reference label",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "answer"
+  ],
+  "additionalProperties": false
+}

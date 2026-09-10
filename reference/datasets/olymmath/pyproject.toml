@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "uenv-dataset-olymmath"
+version = "1.0.0"
+requires-python = ">=3.11"
+dependencies = ["uenv-sdk-reference==0.1.0", "uenv-reference-rules==0.1.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+

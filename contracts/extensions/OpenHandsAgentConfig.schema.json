@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uenv://schemas/vnext/OpenHandsAgentConfig",
+  "type": "object",
+  "description": "OpenHands adapter 的明确可调参数",
+  "properties": {
+    "history_policy": {
+      "type": "string",
+      "description": "由 SDK 管理上下文",
+      "enum": [
+        "sdk"
+      ]
+    },
+    "system_prompt": {
+      "type": "string",
+      "description": "用户附加的系统提示"
+    },
+    "sdk_iteration_limit": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "SDK 自身迭代上限；不能替代 max_generations"
+    }
+  },
+  "required": [
+    "history_policy",
+    "system_prompt",
+    "sdk_iteration_limit"
+  ],
+  "additionalProperties": false
+}

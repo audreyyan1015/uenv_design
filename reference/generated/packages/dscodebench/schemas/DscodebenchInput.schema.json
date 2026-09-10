@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uenv://packages/datasets/dscodebench/1.0.0/DscodebenchInput",
+  "title": "DscodebenchInput",
+  "description": "Model-visible DSCodeBench problem.",
+  "type": "object",
+  "properties": {
+    "instruction": {
+      "type": "string",
+      "description": "Programming problem",
+      "minLength": 1
+    },
+    "library": {
+      "type": "string",
+      "description": "Required library"
+    },
+    "entry_point": {
+      "type": "string",
+      "description": "Required callable entry point"
+    }
+  },
+  "required": [
+    "instruction",
+    "library",
+    "entry_point"
+  ],
+  "additionalProperties": false
+}

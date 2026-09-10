@@ -1,0 +1,13 @@
+id: datasets/swe-pro
+version: 1.0.0
+entrypoints:
+  dataset_adapter: swe_pro.dataset_adapter:SweProAdapter
+  environment: swe_pro.environment:SweProEnvironment
+  scorer: swe_pro.scorer:SweProScorer
+models:
+  input: swe_pro.models:SweProInput
+  private_data: swe_pro.models:SweProPrivateData
+internet_access: false
+required_capabilities:
+- exec.v1
+- filesystem.v1

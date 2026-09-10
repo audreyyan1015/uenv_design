@@ -1,0 +1,35 @@
+{
+  "request_id": "request-olymmath",
+  "run_id": "demo-olymmath",
+  "episode_id": "episode-olymmath",
+  "task": {
+    "schema_version": "vnext.3",
+    "task_id": "olymmath/demo-olymmath",
+    "dataset": {
+      "id": "olymmath",
+      "revision": "synthetic-design-fixture-v1",
+      "split": "example",
+      "subset": ""
+    },
+    "sample_id": "demo-olymmath",
+    "input": {
+      "schema_ref": "uenv://packages/datasets/olymmath/1.0.0/OlymmathInput",
+      "data": {
+        "instruction": "Compute 1/2.",
+        "language": "en",
+        "difficulty": "easy",
+        "subject": "arithmetic"
+      }
+    },
+    "input_digest": "sha256:2e289848c246e931ef1fa4237a4b7a7e7fbc0e30bd0c852c08b78adfec86369c"
+  },
+  "seed": 0,
+  "sample_index": 0,
+  "batch_id": "batch-olymmath",
+  "private_data": {
+    "schema_ref": "uenv://packages/datasets/olymmath/1.0.0/OlymmathPrivateData",
+    "data": {
+      "answer": "0.5"
+    }
+  }
+}

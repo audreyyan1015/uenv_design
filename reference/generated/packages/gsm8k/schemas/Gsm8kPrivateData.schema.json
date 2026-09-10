@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "uenv://packages/datasets/gsm8k/1.0.0/Gsm8kPrivateData",
+  "title": "Gsm8kPrivateData",
+  "description": "Scorer-only GSM8K reference data.",
+  "type": "object",
+  "properties": {
+    "answer": {
+      "type": "string",
+      "description": "Reference answer",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "answer"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,29 @@
+{
+  "schema_version": "vnext.3",
+  "task_id": "swe-smith/demo-swe_smith",
+  "dataset": {
+    "id": "swe-smith",
+    "revision": "synthetic-design-fixture-v1",
+    "split": "example",
+    "subset": ""
+  },
+  "sample_id": "demo-swe_smith",
+  "input": {
+    "schema_ref": "uenv://packages/datasets/swe-smith/1.0.0/SweSmithInput",
+    "data": {
+      "instruction": "Synthetic repository repair task.",
+      "repo": "example/repo",
+      "base_commit": "1111111111111111111111111111111111111111",
+      "workspace_path": "/workspace",
+      "runtime_assets": [
+        {
+          "uri": "reference/fixtures/tests.json",
+          "digest": "sha256:708e62980f6134fdfc5feb7754006c2a9639083fc33458d94cc8c6c4b88bdf6c",
+          "size_bytes": 73,
+          "media_type": "application/json"
+        }
+      ]
+    }
+  },
+  "input_digest": "sha256:8e7a92edf1f7e0da60bfac5e8a1495e1db85d94707c759bfbf7821e6e9158e81"
+}

@@ -1,0 +1,32 @@
+{
+  "schema_version": "vnext.3",
+  "task_id": "scitab/demo-scitab",
+  "dataset": {
+    "id": "scitab",
+    "revision": "synthetic-design-fixture-v1",
+    "split": "example",
+    "subset": ""
+  },
+  "sample_id": "demo-scitab",
+  "input": {
+    "schema_ref": "uenv://packages/datasets/scitab/1.0.0/ScitabInput",
+    "data": {
+      "claim": "A exceeds B.",
+      "paper": "Synthetic paper",
+      "paper_id": "paper-1",
+      "table_id": "table-1",
+      "caption": "Values",
+      "columns": [
+        "A",
+        "B"
+      ],
+      "rows": [
+        [
+          "2",
+          "1"
+        ]
+      ]
+    }
+  },
+  "input_digest": "sha256:7aa329d2b04179abdd1f14dcf9fdf94931960d0169c1e1e7728666a28ea7ebb5"
+}
