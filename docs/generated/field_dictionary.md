@@ -240,7 +240,7 @@ episode 失败重试仅 Server 决定
 
 ## RunSpec
 
-用户创建作业时提供的完整配置
+用户随批次提交的完整运行配置；同一 run_id 的内容不可修改
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
@@ -266,7 +266,6 @@ Bridge -> Server；不接受客户端指定 attempt 或 lease
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
 | `request_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `run_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
 | `episode_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
 | `task` | TaskSpec | 是 |  |
 | `private_data` | TypedConfig | 否 | 可选评分依据，随受控请求配对提交；大型测试使用内部 ArtifactRef；不得交给 Agent/Environment 或公开轨迹 |
@@ -276,13 +275,13 @@ Bridge -> Server；不接受客户端指定 attempt 或 lease
 
 ## BatchRequest
 
-提交一组 episode；batch ID 必须和各项一致
+一次提交共享运行配置和非空任务列表；无前置配置注册请求
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
-| `run_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
+| `run_spec` | RunSpec | 是 | 本批唯一配置；同一 run_id 的内容必须与已保存配置一致 |
 | `batch_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `episodes` | array<EpisodeRequest> | 是 | 非空任务列表，数量受服务器限制 |
+| `episodes` | array<EpisodeRequest> | 是 | 任务按 sample_index 排列；各项 batch_id 与批次一致，不携带配置覆盖 |
 
 ## BatchReceipt
 
@@ -310,11 +309,11 @@ Server 颁发，Worker 核验；不能由用户任务参数携带
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
-| `run_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
 | `episode_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
 | `task` | TaskSpec | 是 |  |
 | `private_data` | TypedConfig | 否 | 可选评分依据，随受控请求配对提交；大型测试使用内部 ArtifactRef；不得交给 Agent/Environment 或公开轨迹 |
 | `seed` | integer | 是 | 本次 episode 种子；最小值：0 |
+| `run_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
 | `purpose` | string | 是 | 作业用途；枚举：evaluation, training |
 | `model` | ModelSpec | 是 |  |
 | `limits` | Limits | 是 |  |

@@ -1,6 +1,5 @@
 {
   "request_id": "request-scitab",
-  "run_id": "demo-scitab",
   "episode_id": "episode-scitab",
   "task": {
     "schema_version": "vnext.3",

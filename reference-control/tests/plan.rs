@@ -6,7 +6,8 @@ use serde_json::{Value, json};
 use uenv_reference_control::contracts::ContractSchema;
 use uenv_reference_control::plan::{
     AgentToolProfile, ComponentCatalog, ComponentMetadata, PlanResolver, RuntimeKind,
-    ToolInterfaceSupport, retry_execution_plan, seal_plan, validate_execution_plan,
+    ToolInterfaceSupport, retry_execution_plan, seal_plan, validate_batch_submission,
+    validate_execution_plan,
 };
 
 fn design_root() -> PathBuf {
@@ -138,8 +139,13 @@ fn nine_plans_are_rebuilt_by_one_rust_resolver() {
     for folder in packages {
         let name = folder.file_name().unwrap();
         let episode_folder = generated.join("episodes").join(name);
-        let run = read(episode_folder.join("run_spec.json"));
-        let episode = read(episode_folder.join("episode_request.json"));
+        let batch = read(episode_folder.join("batch_request.json"));
+        validate_batch_submission(&batch, None, &schema).unwrap();
+        validate_batch_submission(&batch, Some(&batch["run_spec"]), &schema).unwrap();
+        let run = &batch["run_spec"];
+        let episode = &batch["episodes"][0];
+        assert_eq!(*run, read(episode_folder.join("run_spec.json")));
+        assert_eq!(*episode, read(episode_folder.join("episode_request.json")));
         let package = read(folder.join("manifest.json"));
         let expected = read(episode_folder.join("execution_plan.json"));
         let task_schema = package["task_schema"].as_str().unwrap();
@@ -259,12 +265,96 @@ fn nine_plans_are_rebuilt_by_one_rust_resolver() {
             agent_profile: &profile,
         };
         let rebuilt = resolver
-            .resolve(&episode, &run, 1_800_000_000_000, &|image, _, _| {
+            .resolve(episode, run, 1_800_000_000_000, &|image, _, _| {
                 Ok(image.clone())
             })
             .unwrap_or_else(|error| panic!("{}: {}", folder.display(), error.code));
         assert_eq!(rebuilt, expected, "{}", folder.display());
         validate_execution_plan(&rebuilt, &schema).unwrap();
+        let mut multi = batch.clone();
+        let mut second = episode.clone();
+        second["request_id"] = json!("second-request");
+        second["episode_id"] = json!("second-episode");
+        second["sample_index"] = json!(1);
+        multi["episodes"].as_array_mut().unwrap().push(second);
+        validate_batch_submission(&multi, Some(run), &schema).unwrap();
+        let second_plan = resolver
+            .resolve(
+                &multi["episodes"][1],
+                &multi["run_spec"],
+                1_800_000_000_000,
+                &|image, _, _| Ok(image.clone()),
+            )
+            .unwrap();
+        let mut expected_second = expected.clone();
+        expected_second["episode_id"] = json!("second-episode");
+        assert_eq!(second_plan, seal_plan(&expected_second).unwrap());
+    }
+}
+
+#[test]
+fn batch_submission_checks_config_reuse_and_member_identity() {
+    let schema = ContractSchema::bundled();
+    let batch = read(design_root().join("reference/generated/episodes/gsm8k/batch_request.json"));
+    let stored = batch["run_spec"].clone();
+    let mut changed = batch.clone();
+    changed["run_spec"]["limits"]["max_generations"] = json!(2);
+    assert_eq!(
+        validate_batch_submission(&changed, Some(&stored), &schema)
+            .unwrap_err()
+            .code,
+        "RUN_CONFIG_CONFLICT"
+    );
+    assert_eq!(stored, batch["run_spec"]);
+    let mut next = batch.clone();
+    next["batch_id"] = json!("next-batch");
+    next["episodes"][0]["batch_id"] = json!("next-batch");
+    validate_batch_submission(&next, Some(&stored), &schema).unwrap();
+    for (field, value, code) in [
+        ("batch_id", json!("wrong-batch"), "BATCH_ID_MISMATCH"),
+        ("sample_index", json!(1), "SAMPLE_INDEX_MISMATCH"),
+        (
+            "run_id",
+            json!("override"),
+            "UNKNOWN_FIELD:EpisodeRequest.run_id",
+        ),
+        (
+            "run_spec",
+            stored.clone(),
+            "UNKNOWN_FIELD:EpisodeRequest.run_spec",
+        ),
+    ] {
+        let mut invalid = batch.clone();
+        invalid["episodes"][0][field] = value;
+        assert_eq!(
+            validate_batch_submission(&invalid, None, &schema)
+                .unwrap_err()
+                .code,
+            code
+        );
+    }
+    let mut empty = batch.clone();
+    empty["episodes"] = json!([]);
+    assert_eq!(
+        validate_batch_submission(&empty, None, &schema)
+            .unwrap_err()
+            .code,
+        "EMPTY_BATCH"
+    );
+    for field in ["request_id", "episode_id"] {
+        let mut duplicate = batch.clone();
+        let mut second = duplicate["episodes"][0].clone();
+        second["sample_index"] = json!(1);
+        second["request_id"] = json!("different-request");
+        second["episode_id"] = json!("different-episode");
+        second[field] = duplicate["episodes"][0][field].clone();
+        duplicate["episodes"].as_array_mut().unwrap().push(second);
+        assert_eq!(
+            validate_batch_submission(&duplicate, None, &schema)
+                .unwrap_err()
+                .code,
+            "DUPLICATE_BATCH_MEMBER"
+        );
     }
 }
 

@@ -1,0 +1,205 @@
+{
+  "batch_id": "batch-swe_smith",
+  "run_spec": {
+    "run_id": "demo-swe_smith",
+    "purpose": "evaluation",
+    "environment": {
+      "implementation": {
+        "id": "datasets/swe-smith",
+        "version": "1.0.0"
+      },
+      "config": {
+        "schema_ref": "uenv://schemas/vnext/EmptyConfig",
+        "data": {}
+      }
+    },
+    "agent": {
+      "implementation": {
+        "id": "agents/openhands",
+        "version": "1.0.0"
+      },
+      "config": {
+        "schema_ref": "uenv://schemas/vnext/OpenHandsAgentConfig",
+        "data": {
+          "system_prompt": ""
+        }
+      }
+    },
+    "tools": [
+      {
+        "name": "terminal",
+        "implementation": {
+          "id": "tools/terminal",
+          "version": "1.0.0"
+        },
+        "config": {
+          "schema_ref": "uenv://schemas/vnext/ToolConfig",
+          "data": {
+            "timeout_ms": 30000,
+            "max_preview_bytes": 8192
+          }
+        }
+      },
+      {
+        "name": "file_editor",
+        "implementation": {
+          "id": "tools/file-editor",
+          "version": "1.0.0"
+        },
+        "config": {
+          "schema_ref": "uenv://schemas/vnext/ToolConfig",
+          "data": {
+            "timeout_ms": 30000,
+            "max_preview_bytes": 8192
+          }
+        }
+      },
+      {
+        "name": "task_tracker",
+        "implementation": {
+          "id": "tools/openhands-task-tracker",
+          "version": "1.0.0"
+        },
+        "config": {
+          "schema_ref": "uenv://schemas/vnext/EmptyConfig",
+          "data": {}
+        }
+      },
+      {
+        "name": "finish",
+        "implementation": {
+          "id": "tools/openhands-finish",
+          "version": "1.0.0"
+        },
+        "config": {
+          "schema_ref": "uenv://schemas/vnext/EmptyConfig",
+          "data": {}
+        }
+      }
+    ],
+    "scorer": {
+      "implementation": {
+        "id": "datasets/swe-smith",
+        "version": "1.0.0"
+      },
+      "config": {
+        "schema_ref": "uenv://schemas/vnext/EmptyConfig",
+        "data": {}
+      }
+    },
+    "backend": {
+      "implementation": {
+        "id": "backends/docker",
+        "version": "1.0.0"
+      },
+      "resources": {
+        "cpu_cores": 1,
+        "memory_bytes": 1073741824,
+        "process_limit": 64,
+        "disk_bytes": 1073741824
+      },
+      "config": {
+        "schema_ref": "uenv://schemas/vnext/ContainerBackendConfig",
+        "data": {}
+      }
+    },
+    "model": {
+      "endpoint": "http://localhost:9000/v1",
+      "model_id": "example",
+      "source": "simulated",
+      "credential_ref": "",
+      "generation": {
+        "temperature": 0,
+        "top_p": 1,
+        "max_output_tokens": 1024,
+        "stop": []
+      },
+      "max_transport_retries": 0
+    },
+    "limits": {
+      "total_timeout_ms": 300000,
+      "score_reserve_ms": 120000,
+      "max_generations": 30,
+      "max_tool_calls": 60,
+      "max_environment_steps": 0,
+      "max_total_output_tokens": 32768
+    },
+    "runtime": {
+      "image": "example.invalid/runtime@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    "retry": {
+      "max_attempts": 1,
+      "initial_backoff_ms": 500,
+      "max_backoff_ms": 5000
+    },
+    "trajectory_retention_days": 7,
+    "schema_version": "vnext.3"
+  },
+  "episodes": [
+    {
+      "request_id": "request-swe_smith",
+      "episode_id": "episode-swe_smith",
+      "task": {
+        "schema_version": "vnext.3",
+        "task_id": "swe-smith/demo-swe_smith",
+        "dataset": {
+          "id": "swe-smith",
+          "revision": "synthetic-design-fixture-v1",
+          "split": "example",
+          "subset": ""
+        },
+        "sample_id": "demo-swe_smith",
+        "input": {
+          "schema_ref": "uenv://packages/datasets/swe-smith/1.0.0/SweSmithInput",
+          "data": {
+            "instruction": "Synthetic repository repair task.",
+            "repo": "example/repo",
+            "base_commit": "1111111111111111111111111111111111111111",
+            "workspace_path": "/workspace",
+            "runtime_assets": [
+              {
+                "uri": "reference/fixtures/tests.json",
+                "digest": "sha256:708e62980f6134fdfc5feb7754006c2a9639083fc33458d94cc8c6c4b88bdf6c",
+                "size_bytes": 73,
+                "media_type": "application/json"
+              }
+            ]
+          }
+        },
+        "input_digest": "sha256:8e7a92edf1f7e0da60bfac5e8a1495e1db85d94707c759bfbf7821e6e9158e81"
+      },
+      "seed": 0,
+      "sample_index": 0,
+      "batch_id": "batch-swe_smith",
+      "private_data": {
+        "schema_ref": "uenv://packages/datasets/swe-smith/1.0.0/SweSmithPrivateData",
+        "data": {
+          "test_patch": {
+            "uri": "reference/fixtures/tests.json",
+            "digest": "sha256:708e62980f6134fdfc5feb7754006c2a9639083fc33458d94cc8c6c4b88bdf6c",
+            "size_bytes": 73,
+            "media_type": "application/json"
+          },
+          "reference_patch": null,
+          "fail_to_pass": [
+            "test_example"
+          ],
+          "pass_to_pass": [],
+          "evaluation_plan": {
+            "harness": {
+              "id": "harness/swe-example",
+              "version": "1.0.0",
+              "digest": "sha256:708e62980f6134fdfc5feb7754006c2a9639083fc33458d94cc8c6c4b88bdf6c"
+            },
+            "setup_argv": [],
+            "test_argv": [
+              "fixture-tests"
+            ],
+            "cwd": "/workspace",
+            "timeout_ms": 120000
+          }
+        }
+      }
+    }
+  ]
+}

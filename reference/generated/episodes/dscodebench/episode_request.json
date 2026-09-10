@@ -1,6 +1,5 @@
 {
   "request_id": "request-dscodebench",
-  "run_id": "demo-dscodebench",
   "episode_id": "episode-dscodebench",
   "task": {
     "schema_version": "vnext.3",

@@ -1,6 +1,5 @@
 {
   "request_id": "request-swe_smith",
-  "run_id": "demo-swe_smith",
   "episode_id": "episode-swe_smith",
   "task": {
     "schema_version": "vnext.3",

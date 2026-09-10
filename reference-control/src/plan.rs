@@ -106,6 +106,50 @@ impl ComponentCatalog {
     }
 }
 
+/// Validate the shared submission before resolving each member independently.
+/// `stored_run` is a read-only comparison value for this run_id, never a fallback
+/// configuration. Production must repeat this check in the persistence transaction.
+pub fn validate_batch_submission(
+    batch: &Value,
+    stored_run: Option<&Value>,
+    schema: &ContractSchema,
+) -> Result<()> {
+    schema.validate_shape("BatchRequest", batch)?;
+    let run = &batch["run_spec"];
+    schema.validate_shape("RunSpec", run)?;
+    let run_id = string(run, "run_id")?;
+    if let Some(stored) = stored_run {
+        if string(stored, "run_id")? != run_id {
+            return Err(ControlError::new("RUN_ID_MISMATCH"));
+        }
+        if stored != run {
+            return Err(ControlError::new("RUN_CONFIG_CONFLICT"));
+        }
+    }
+    let batch_id = string(batch, "batch_id")?;
+    let episodes = array(batch, "episodes")?;
+    if episodes.is_empty() {
+        return Err(ControlError::new("EMPTY_BATCH"));
+    }
+    let mut request_ids = BTreeSet::new();
+    let mut episode_ids = BTreeSet::new();
+    for (index, episode) in episodes.iter().enumerate() {
+        schema.validate_shape("EpisodeRequest", episode)?;
+        if string(episode, "batch_id")? != batch_id {
+            return Err(ControlError::new("BATCH_ID_MISMATCH"));
+        }
+        if episode["sample_index"].as_u64() != Some(index as u64) {
+            return Err(ControlError::new("SAMPLE_INDEX_MISMATCH"));
+        }
+        if !request_ids.insert(string(episode, "request_id")?)
+            || !episode_ids.insert(string(episode, "episode_id")?)
+        {
+            return Err(ControlError::new("DUPLICATE_BATCH_MEMBER"));
+        }
+    }
+    Ok(())
+}
+
 pub struct PlanResolver<'a> {
     pub schema: &'a ContractSchema,
     pub catalog: &'a ComponentCatalog,
@@ -113,6 +157,8 @@ pub struct PlanResolver<'a> {
 }
 
 impl PlanResolver<'_> {
+    /// Resolve one validated batch member using the same BatchRequest.run_spec.
+    /// This is an internal calculation, not a separate configuration RPC.
     pub fn resolve(
         &self,
         episode: &Value,
@@ -122,9 +168,6 @@ impl PlanResolver<'_> {
     ) -> Result<Value> {
         self.schema.validate_shape("EpisodeRequest", episode)?;
         self.schema.validate_shape("RunSpec", run)?;
-        if string(episode, "run_id")? != string(run, "run_id")? {
-            return Err(ControlError::new("RUN_ID_MISMATCH"));
-        }
 
         let task = episode
             .get("task")
@@ -147,7 +190,8 @@ impl PlanResolver<'_> {
         let mut required = BTreeSet::<String>::new();
 
         let mut plan = Map::new();
-        for field in ["run_id", "episode_id", "task", "seed"] {
+        plan.insert("run_id".to_owned(), run["run_id"].clone());
+        for field in ["episode_id", "task", "seed"] {
             plan.insert(
                 field.to_owned(),
                 episode.get(field).cloned().ok_or_else(|| {

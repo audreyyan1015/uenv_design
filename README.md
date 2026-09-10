@@ -63,7 +63,7 @@ design/
 - [扩展示例](reference/extension_templates.py)：`PlainAgent` 和 Python 工具示例；不包含后端。
 - [数据集示例](reference/datasets)：九个包都包含 `dataset.yaml`、`pyproject.toml`、`src/<package>/models.py`、三个专属入口和本地测试，共 27 个直接子类。
 - [公开运行示例](reference/runs)：独立于数据集包的 `run.yaml`，只含公开参数，不含 `schema_ref`。
-- [生成夹具](reference/generated)：发布后 manifest、包 schema、内部请求、RunSpec 和 ExecutionPlan；用户不编辑这些文件。
+- [生成夹具](reference/generated)：发布后 manifest、包 schema、批次提交 batch_request.json 和 ExecutionPlan；run_spec.json、episode_request.json 是批次内容的独立阅读视图，用户不编辑这些文件。
 - [有状态环境示例](reference/examples/counter_environment.py)：说明 `Observation`、`Transition` 和 `Outcome`。
 - [机器可校验契约](contracts/uenv.schema.json)：当前本地参考生成物。目标生产协议以 `contracts/proto/uenv/v1/*.proto` 为唯一可编辑来源，并生成 Rust/Python 类型、JSON schema 和字段字典；数据集新增业务字段只在包内 `models.py` 定义，由发布工具生成包 schema。
 

@@ -1,6 +1,5 @@
 {
   "request_id": "request-gsm8k",
-  "run_id": "demo-gsm8k",
   "episode_id": "episode-gsm8k",
   "task": {
     "schema_version": "vnext.3",

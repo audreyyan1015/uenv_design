@@ -1,6 +1,5 @@
 {
   "request_id": "request-olymmath",
-  "run_id": "demo-olymmath",
   "episode_id": "episode-olymmath",
   "task": {
     "schema_version": "vnext.3",

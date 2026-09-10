@@ -32,9 +32,9 @@
 |---|---|---|
 | `domain/sample.py` | FrameworkSample / SampleIdentity | 保存框架样本与 episode 的身份关系，不存业务题目别名 |
 | `domain/ports.py` | EpisodeClient / ModelProvider | 声明对 Server 与框架推理服务的窄接口 |
-| `application/bridge_service.py` | BridgeService | 创建 run 时共用契约驱动的配置补值和校验函数；提交与收集统一批次 |
+| `application/bridge_service.py` | BridgeService | 共用契约驱动的配置补值和校验；将一份 RunSpec 与多条 EpisodeRequest 作为 BatchRequest 一次提交并收集结果 |
 | `application/sample_preparation.py` | prepare_samples | 互斥解析自带数据与 Hub 样本；原始行经 DatasetAdapter 转换，标准化行直接校验，统一输出 task/private_data |
-| `application/request_builder.py` | build_episode_request / build_batch_request | 从公开 TaskSpec/RunSpec 构建请求和稳定 ID；公开 task 与私有 private_data 配对进入 EpisodeRequest，评分数据不进入 TaskSpec |
+| `application/request_builder.py` | build_episode_request / build_batch_request | 从 TaskSpec、种子和配对 private_data 构造成员；与一份 RunSpec 组装 BatchRequest，配置只在 run_spec，不进入成员 |
 | `application/result_collector.py` | ResultCollector | 按身份收集、取消和恢复订阅，不重算评分 |
 | `application/training_sample_builder.py` | TrainingSampleBuilder | 将生成事件转成有版本的框架中间视图，校验 token 对齐 |
 | `application/legacy_request_adapter.py` | LegacyRequestAdapter | 迁移期唯一旧字段/旧 env_type 转换入口 |
@@ -62,7 +62,7 @@
 | `domain/error.rs` | ServerError | 稳定错误分类，区分任务错误和系统错误 |
 | `application/episode_service.rs` | EpisodeService | 统一提交入口，禁止数据集分支 |
 | `application/request_validation.rs` | validate_request | 协议与包 schema 校验；幂等状态比较由 EpisodeService 在仓库事务中处理 |
-| `application/plan_resolver.rs` | PlanResolver | 转换请求与配置为唯一 ExecutionPlan；原位置锁定组件，tools 表只一份，runtime.image 只一处生效 |
+| `application/plan_resolver.rs` | PlanResolver / validate_batch_submission | 校验批次共享配置与身份，逐成员从同一 run_spec 生成 ExecutionPlan；原位置锁定组件，tools 表只一份，runtime.image 只一处生效 |
 | `application/admission_controller.rs` | AdmissionController | 有界排队与租户/作业并发配额 |
 | `application/placement_scheduler.rs` | PlacementScheduler | 按能力和资源 reserve，不读题目字段 |
 | `application/lease_service.rs` | LeaseService | 颁发/更新/失效 lease |

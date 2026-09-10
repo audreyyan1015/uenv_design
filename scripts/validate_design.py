@@ -179,6 +179,30 @@ class ContractTests(unittest.TestCase):
                 self.assertFalse((package / "episode_request.json").exists())
                 self.assertFalse((package / "execution_plan.json").exists())
 
+    def test_batches_carry_one_config_without_episode_overrides(self):
+        self.assertEqual(set(SCHEMA["$defs"]["BatchRequest"]["properties"]), {"batch_id", "run_spec", "episodes"})
+        self.assertNotIn("run_id", SCHEMA["$defs"]["EpisodeRequest"]["properties"])
+        for name in PACKAGES:
+            batch = generated(name, "batch_request.json")
+            with self.subTest(dataset=name):
+                validate("BatchRequest", batch)
+                self.assertEqual(batch["run_spec"], generated(name, "run_spec.json"))
+                self.assertEqual(batch["episodes"], [generated(name, "episode_request.json")])
+                self.assertEqual(batch["run_spec"]["run_id"], generated(name, "execution_plan.json")["run_id"])
+                for field, value in (("run_spec", batch["run_spec"]), ("run_id", "override"), ("agent", batch["run_spec"]["agent"])):
+                    invalid = copy.deepcopy(batch)
+                    invalid["episodes"][0][field] = value
+                    with self.subTest(field=field), self.assertRaises(ValidationError):
+                        validate("BatchRequest", invalid)
+                empty = copy.deepcopy(batch)
+                empty["episodes"] = []
+                with self.assertRaises(ValidationError):
+                    validate("BatchRequest", empty)
+                legacy = copy.deepcopy(batch)
+                legacy["run_id"] = legacy.pop("run_spec")["run_id"]
+                with self.assertRaises(ValidationError):
+                    validate("BatchRequest", legacy)
+
     def test_nine_reference_fixtures_use_the_documented_author_layout(self):
         central_contract_source = (ROOT / "scripts/build_contracts.py").read_text(encoding="utf-8")
         generic_builder_source = (ROOT / "scripts/build_examples.py").read_text(encoding="utf-8")

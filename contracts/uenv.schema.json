@@ -737,7 +737,7 @@
     },
     "RunSpec": {
       "type": "object",
-      "description": "用户创建作业时提供的完整配置",
+      "description": "用户随批次提交的完整运行配置；同一 run_id 的内容不可修改",
       "properties": {
         "schema_version": {
           "const": "vnext.3",
@@ -852,12 +852,6 @@
           "minLength": 1,
           "maxLength": 256
         },
-        "run_id": {
-          "type": "string",
-          "description": "不透明身份标识；不得用其他实体的 ID 代填",
-          "minLength": 1,
-          "maxLength": 256
-        },
         "episode_id": {
           "type": "string",
           "description": "不透明身份标识；不得用其他实体的 ID 代填",
@@ -890,7 +884,6 @@
       },
       "required": [
         "request_id",
-        "run_id",
         "episode_id",
         "task",
         "seed",
@@ -901,13 +894,11 @@
     },
     "BatchRequest": {
       "type": "object",
-      "description": "提交一组 episode；batch ID 必须和各项一致",
+      "description": "一次提交共享运行配置和非空任务列表；无前置配置注册请求",
       "properties": {
-        "run_id": {
-          "type": "string",
-          "description": "不透明身份标识；不得用其他实体的 ID 代填",
-          "minLength": 1,
-          "maxLength": 256
+        "run_spec": {
+          "$ref": "urn:uenv:vnext:contracts#/$defs/RunSpec",
+          "description": "本批唯一配置；同一 run_id 的内容必须与已保存配置一致"
         },
         "batch_id": {
           "type": "string",
@@ -920,11 +911,12 @@
           "items": {
             "$ref": "urn:uenv:vnext:contracts#/$defs/EpisodeRequest"
           },
-          "description": "非空任务列表，数量受服务器限制"
+          "description": "任务按 sample_index 排列；各项 batch_id 与批次一致，不携带配置覆盖",
+          "minItems": 1
         }
       },
       "required": [
-        "run_id",
+        "run_spec",
         "batch_id",
         "episodes"
       ],
@@ -994,12 +986,6 @@
       "type": "object",
       "description": "由请求与配置转换而来，不嵌套 EpisodeRequest/RunSpec；每项执行配置仅一处生效",
       "properties": {
-        "run_id": {
-          "type": "string",
-          "description": "不透明身份标识；不得用其他实体的 ID 代填",
-          "minLength": 1,
-          "maxLength": 256
-        },
         "episode_id": {
           "type": "string",
           "description": "不透明身份标识；不得用其他实体的 ID 代填",
@@ -1017,6 +1003,12 @@
           "type": "integer",
           "minimum": 0,
           "description": "本次 episode 种子"
+        },
+        "run_id": {
+          "type": "string",
+          "description": "不透明身份标识；不得用其他实体的 ID 代填",
+          "minLength": 1,
+          "maxLength": 256
         },
         "purpose": {
           "type": "string",
@@ -1170,10 +1162,10 @@
         }
       },
       "required": [
-        "run_id",
         "episode_id",
         "task",
         "seed",
+        "run_id",
         "purpose",
         "model",
         "limits",

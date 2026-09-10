@@ -65,7 +65,7 @@ Agent SDK 如果内部使用 turn、iteration 等名称，接入层必须映射�
 
 | 字段 | 提交时来源 | 执行时位置 | 消费规则 |
 |---|---|---|---|
-| run_id | EpisodeRequest；必须等于所引用 RunSpec.run_id | ExecutionPlan.run_id | 关联作业，不在 Worker 再查配置 |
+| run_id | BatchRequest.run_spec.run_id；输入只在 RunSpec 中出现 | ExecutionPlan.run_id | 从批次共同配置派生，关联作业；不在 Worker 再查配置 |
 | episode_id、seed | EpisodeRequest | ExecutionPlan 同名字段 | 采样执行身份和种子，重试保持 |
 | task | EpisodeRequest.task | ExecutionPlan.task | 完整公开 TaskSpec 原值，不增加 task_view 等副本类型 |
 | private_data | 准备入口从原始样本转换或读取标准化样本；Adapter 返回 UEnvModel，SDK 封装后与 task 配对进入 EpisodeRequest | ExecutionPlan.private_data → ScoreInput.private_data | 不生成中间材料文件；公开任务与公开轨迹不得携带 |
@@ -84,6 +84,8 @@ Agent SDK 如果内部使用 turn、iteration 等名称，接入层必须映射�
 | remaining_timeout_ms | Server 根据 ExecutionPlan.deadline_at_ms 派生 | DispatchRequest | 只能收紧时间，不是第二份用户配置；Worker RPC 核验后，Supervisor 用它建立本机单调截止时间 |
 | consumed_usage | Server 的 episode 用量账本 | DispatchRequest | 此前 attempt 已确认的累计用量；Worker 据此继续计数，首次为全 0 |
 
+BatchRequest 固定包含 batch_id、run_spec、episodes；run_spec 是本批唯一完整 RunSpec，episodes 非空。每条 EpisodeRequest 不包含 run_id、run_spec 或组件配置；ExecutionPlan.run_id 从 run_spec.run_id 派生。相同 run_id 的完整配置必须一致，Server 在保存任务的事务内核验并拒绝冲突；旧配置只供比较，不作为补值或覆盖来源。重复 batch_id 的请求内容必须一致；成员 request_id 的幂等判断包含所属 run_id，避免跨运行复用请求身份。上述数据库事务与幂等接入仍待生产实现。
+
 公开客户端只提交批次；单条执行使用只含一个成员的 BatchRequest。因此每个 EpisodeRequest 都有自己的 request_id，同时也总有 batch_id 和从 0 开始的 sample_index。三者分别表示成员幂等、批次身份和批内位置，不能互相代替。
 
 `purpose=training` 必须同时提供 `training`，`purpose=evaluation` 必须省略 `training`。这是同一份运行配置的条件约束：purpose 决定结果交给训练器还是评测汇总器，training 只描述训练所需的版本/轨迹条件，不是第二种评分模式。
@@ -100,7 +102,7 @@ PackageManifest.provided_tools 只登记包能够提供的 ToolSpec；RunSpec.to
 
 ### 1.1 用户输入与完整 RunSpec
 
-YAML 文件与 SDK 输入共用 Bridge 配置规范化函数。系统字段默认值只定义在核心契约，组件参数默认值只定义在对应模型并生成 schema；本地过渡来源仍是 scripts/build_contracts.py 与包 models.py。不得再建立一份数据集默认运行配置表或让 Worker 补值。文件填写步骤见[用户指南第 2 节](../guides/user_guide.md#2-填写运行配置)。
+YAML 文件与 SDK 输入共用 Bridge 配置规范化函数，输出完整 RunSpec 后放入 BatchRequest.run_spec，一次提交配置与任务；不存在独立配置注册接口。系统字段默认值只定义在核心契约，组件参数默认值只定义在对应模型并生成 schema；本地过渡来源仍是 scripts/build_contracts.py 与包 models.py。不得再建立一份数据集默认运行配置表或让 Worker 补值。文件填写步骤见[用户指南第 2 节](../guides/user_guide.md#2-填写运行配置)。
 
 提交入口仅为缺失字段应用声明默认值，不覆盖显式值，不把 null 当成省略；未声明默认值的必填字段缺失时报错。可省略的 config 先作为空对象处理，再按组件模型补值并校验。提交后的 RunSpec 和 ExecutionPlan 保持完整必填约束；schema 的 default 是提交注解，不代表 Server/Worker validator 自动修改输入。当前参考只应用明确对象属性和数组元素的默认值，不猜测条件或联合分支的默认值。
 

@@ -36,8 +36,6 @@ def fixture_plan(episode, run, environment_manifest, registry, catalog):
     registry.validate("EpisodeRequest", episode)
     registry.validate("RunSpec", run)
     registry.validate("PackageManifest", environment_manifest)
-    if episode["run_id"] != run["run_id"]:
-        raise ValueError("RUN_ID_MISMATCH")
     package_ref = {
         "id": environment_manifest["id"],
         "version": environment_manifest["version"],
@@ -56,7 +54,7 @@ def fixture_plan(episode, run, environment_manifest, registry, catalog):
             != environment_manifest.get("private_schema")):
         raise ValueError("SCORER_PRIVATE_SCHEMA_MISMATCH")
 
-    plan = {key: deepcopy(episode[key]) for key in ("run_id", "episode_id", "task", "seed")}
+    plan = {"run_id": run["run_id"], **{key: deepcopy(episode[key]) for key in ("episode_id", "task", "seed")}}
     if "private_data" in episode:
         plan["private_data"] = deepcopy(episode["private_data"])
     for key in ("purpose", "model", "limits", "training"):

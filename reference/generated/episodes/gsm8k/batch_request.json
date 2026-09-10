@@ -1,0 +1,120 @@
+{
+  "batch_id": "batch-gsm8k",
+  "run_spec": {
+    "run_id": "demo-gsm8k",
+    "purpose": "evaluation",
+    "environment": {
+      "implementation": {
+        "id": "datasets/gsm8k",
+        "version": "1.0.0"
+      },
+      "config": {
+        "schema_ref": "uenv://schemas/vnext/EmptyConfig",
+        "data": {}
+      }
+    },
+    "agent": {
+      "implementation": {
+        "id": "agents/plain",
+        "version": "1.0.0"
+      },
+      "config": {
+        "schema_ref": "uenv://schemas/vnext/PlainAgentConfig",
+        "data": {
+          "history_policy": "full",
+          "system_prompt": ""
+        }
+      }
+    },
+    "tools": [],
+    "scorer": {
+      "implementation": {
+        "id": "datasets/gsm8k",
+        "version": "1.0.0"
+      },
+      "config": {
+        "schema_ref": "uenv://schemas/vnext/EmptyConfig",
+        "data": {}
+      }
+    },
+    "backend": {
+      "implementation": {
+        "id": "backends/process",
+        "version": "1.0.0"
+      },
+      "config": {
+        "schema_ref": "uenv://schemas/vnext/ProcessBackendConfig",
+        "data": {
+          "runtime_profile": "example-only"
+        }
+      },
+      "resources": {
+        "cpu_cores": 1,
+        "memory_bytes": 1073741824,
+        "process_limit": 64,
+        "disk_bytes": 1073741824
+      }
+    },
+    "model": {
+      "endpoint": "http://localhost:9000/v1",
+      "model_id": "example",
+      "source": "simulated",
+      "credential_ref": "",
+      "generation": {
+        "temperature": 0,
+        "top_p": 1,
+        "max_output_tokens": 1024,
+        "stop": []
+      },
+      "max_transport_retries": 0
+    },
+    "limits": {
+      "total_timeout_ms": 300000,
+      "score_reserve_ms": 120000,
+      "max_generations": 1,
+      "max_tool_calls": 0,
+      "max_environment_steps": 0,
+      "max_total_output_tokens": 32768
+    },
+    "retry": {
+      "max_attempts": 1,
+      "initial_backoff_ms": 500,
+      "max_backoff_ms": 5000
+    },
+    "trajectory_retention_days": 7,
+    "schema_version": "vnext.3"
+  },
+  "episodes": [
+    {
+      "request_id": "request-gsm8k",
+      "episode_id": "episode-gsm8k",
+      "task": {
+        "schema_version": "vnext.3",
+        "task_id": "gsm8k/demo-gsm8k",
+        "dataset": {
+          "id": "gsm8k",
+          "revision": "synthetic-design-fixture-v1",
+          "split": "example",
+          "subset": ""
+        },
+        "sample_id": "demo-gsm8k",
+        "input": {
+          "schema_ref": "uenv://packages/datasets/gsm8k/1.0.0/Gsm8kInput",
+          "data": {
+            "instruction": "There are 2 apples and 3 more arrive. How many apples?"
+          }
+        },
+        "input_digest": "sha256:a7ce7d9b3477dccfa29c8712d8113626aef2bbe5aff58d1983cb9401a677f657"
+      },
+      "seed": 0,
+      "sample_index": 0,
+      "batch_id": "batch-gsm8k",
+      "private_data": {
+        "schema_ref": "uenv://packages/datasets/gsm8k/1.0.0/Gsm8kPrivateData",
+        "data": {
+          "answer": "5"
+        }
+      }
+    }
+  ]
+}

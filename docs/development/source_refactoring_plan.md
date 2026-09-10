@@ -82,9 +82,11 @@ flowchart LR
 
 ### 2.3 一个配置只有一个生效来源
 
-Server 在接收新请求后一次性解析 `EpisodeRequest + RunSpec`，并按已选组件引用查询可信目录，生成不可变的 `ExecutionPlan`。Worker 和 Python 组件只读取计划中属于自己的字段，不再从任务 payload、数据集名称、环境变量或默认 manifest 重新覆盖执行配置。
+Server 一次接收 BatchRequest，其中 run_spec 是共享配置、episodes 是任务列表；在校验配置一致性后逐条解析，并按已选组件引用查询可信目录，生成不可变的 `ExecutionPlan`。Worker 和 Python 组件只读取计划中属于自己的字段，不再从任务 payload、数据集名称、环境变量或默认 manifest 重新覆盖执行配置。
 
 运行期间可以读取服务启动参数、凭据和节点事实，例如数据库地址、容器引擎 socket、Worker 可用 CPU 和访问令牌。这些是部署状态，不得改变某个任务已经锁定的 Agent、Backend、工具、镜像或评分规则。
+
+同一 run_id 的完整配置在接收批次的事务中比较、首次保存，随后批次必须一致；不新增前置的配置注册请求。旧请求通过 Bridge 兼容入口转换为新批次，正式 Server 接口不同时接受“仅 run_id 查配置”和“批次携带配置”两种提交形态。
 
 ### 2.4 主流程不识别数据集
 

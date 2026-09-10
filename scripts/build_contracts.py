@@ -159,7 +159,7 @@ obj("RetryPolicy", "episode 失败重试仅 Server 决定", {
     "max_attempts": integer("含首次在内的最大 attempt 数", 1),
     "initial_backoff_ms": integer("初始退避毫秒", 1),
     "max_backoff_ms": integer("退避上限毫秒", 1)})
-obj("RunSpec", "用户创建作业时提供的完整配置", {
+obj("RunSpec", "用户随批次提交的完整运行配置；同一 run_id 的内容不可修改", {
     "schema_version": {"const": "vnext.3", "description": "契约版本"}, "run_id": ID,
     "purpose": enum("作业用途", "evaluation", "training"), "environment": ref("ComponentSpec"),
     "agent": ref("ComponentSpec", "智能体实现与参数；不提供 Agent 池或 placement；按 agent 角色校验接口和配置"), "tools": array(ref("ToolBinding"), "完整显式工具绑定；空数组要求实际无模型可见工具，不兼容的 Agent 必须拒绝"),
@@ -192,13 +192,13 @@ for type_name, defaults in {
         D[type_name]["properties"][field_name]["default"] = default
 
 obj("EpisodeRequest", "Bridge -> Server；不接受客户端指定 attempt 或 lease", {
-    "request_id": ID, "run_id": ID, "episode_id": ID, "task": ref("TaskSpec"),
+    "request_id": ID, "episode_id": ID, "task": ref("TaskSpec"),
     "private_data": ref("TypedConfig", "可选评分依据，随受控请求配对提交；大型测试使用内部 ArtifactRef；不得交给 Agent/Environment 或公开轨迹"),
     "seed": integer("本次 episode 种子"), "sample_index": integer("批次内位置，从 0 开始"),
     "batch_id": ID}, ("private_data",))
-obj("BatchRequest", "提交一组 episode；batch ID 必须和各项一致", {
-    "run_id": ID, "batch_id": ID,
-    "episodes": array(ref("EpisodeRequest"), "非空任务列表，数量受服务器限制")})
+obj("BatchRequest", "一次提交共享运行配置和非空任务列表；无前置配置注册请求", {
+    "run_spec": ref("RunSpec", "本批唯一配置；同一 run_id 的内容必须与已保存配置一致"), "batch_id": ID,
+    "episodes": {**array(ref("EpisodeRequest"), "任务按 sample_index 排列；各项 batch_id 与批次一致，不携带配置覆盖"), "minItems": 1}})
 obj("BatchReceipt", "提交确认不是执行成功", {"batch_id": ID, "episode_ids": array(ID, "已接纳的 episode ID")})
 obj("Lease", "Server 颁发，Worker 核验；不能由用户任务参数携带", {
     "lease_id": ID, "epoch": integer("服务实例任期"), "expires_at_ms": TIME,
@@ -220,6 +220,7 @@ def resolved_schema(name):
 
 plan_fields = {k: copy.deepcopy(v) for k, v in D["EpisodeRequest"]["properties"].items()
                if k not in ("request_id", "batch_id", "sample_index")}
+plan_fields["run_id"] = copy.deepcopy(D["RunSpec"]["properties"]["run_id"])
 plan_fields.update({k: copy.deepcopy(D["RunSpec"]["properties"][k])
                     for k in ("purpose", "model", "limits", "training")})
 plan_fields.update({k: resolved_schema(t) for k, t in (

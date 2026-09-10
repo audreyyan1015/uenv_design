@@ -1,6 +1,5 @@
 {
   "request_id": "request-pubmedqa",
-  "run_id": "demo-pubmedqa",
   "episode_id": "episode-pubmedqa",
   "task": {
     "schema_version": "vnext.3",

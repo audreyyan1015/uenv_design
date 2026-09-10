@@ -2,6 +2,15 @@
 
 验证日期：2026-09-10。验证对象仅为 `architecture-review-0905/design`。
 
+## 批次一次提交复验（2026-09-10）
+
+- BatchRequest 统一为 batch_id、run_spec、episodes；配置随任务一次提交，没有前置注册接口。EpisodeRequest 移除 run_id 和任何配置覆盖，ExecutionPlan.run_id 只从批次 RunSpec 派生。
+- 九个数据集新增由生成器维护的 batch_request.json。独立 run_spec.json、episode_request.json 仅作为阅读视图；对照清理前的九份 ExecutionPlan，所有字段值与 plan_digest 均保持不变。
+- Rust validate_batch_submission 核验批次非空、成员 batch_id/sample_index、重复身份及同 run_id 的完整配置一致性；stored_run 只用于比较。每条任务仍由同一 PlanResolver 使用批次 run_spec 生成计划。
+- 全部 33 项验证测试通过，其中包含 Rust 控制测试入口。新增验证覆盖九个数据集的多成员共享配置、后续批次复用、配置冲突、重复身份、空批次和成员覆盖字段拒绝。
+- 三个生成脚本运行成功；Rust fmt 与 clippy -D warnings 通过；74 个本地链接和标题锚点、26 个 Mermaid 代码块边界检查通过，未逐图渲染。git diff --check 通过。
+- 本地校验函数不实现数据库。配置比较与首次保存、任务持久化和并发幂等必须在生产 Server 事务中完成；生产 Bridge/RPC、部署、真实模型与后端均未在本次实现或验收。修改仅在 design，未新增临时脚本。
+
 ## run.yaml 配置清理复验（2026-09-10）
 
 - 删除 ContainerBackendConfig.runtime_profile，以及 OpenHandsAgentConfig.history_policy、sdk_iteration_limit；同步九份运行示例、生成契约与计划。Process 的 runtime_profile 继续专指本机运行环境。

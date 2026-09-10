@@ -98,7 +98,6 @@ def main() -> None:
             task["runtime"] = runtime
         episode = {
             "request_id": f"request-{name}",
-            "run_id": f"demo-{name}",
             "episode_id": f"episode-{name}",
             "task": task,
             "seed": 0,
@@ -110,14 +109,15 @@ def main() -> None:
 
         public_run = load_yaml(ROOT / "reference/runs" / f"{name}.yaml")
         run = expand_run(public_run, manifest, catalog)
-        if episode["run_id"] != run["run_id"]:
-            raise ValueError(f"Run id mismatch for {name}")
+        batch = {"batch_id": episode["batch_id"], "run_spec": run, "episodes": [episode]}
+        registry.validate("BatchRequest", batch)
         registry.validate("RunSpec", run)
         registry.validate("TaskSpec", task)
         registry.validate("EpisodeRequest", episode)
         plan = fixture_plan(episode, run, manifest, registry, catalog)
 
         output = generated_root / "episodes" / name
+        write_json(output / "batch_request.json", batch)
         write_json(output / "task.json", task)
         write_json(output / "episode_request.json", episode)
         write_json(output / "run_spec.json", run)

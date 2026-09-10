@@ -54,7 +54,7 @@ UEnv 负责执行与评分，Trainer 负责优化器、梯度更新和模型参�
 | 内容 | 用户操作 | 系统处理 |
 |---|---|---|
 | 任务数据 | 提供原始样本、标准化 JSONL，或指定 Hub 的固定数据版本与样本范围 | 准备阶段统一转换或校验为标准任务，正确配对私有评分材料 |
-| 运行配置 | 填写 run.yaml，或通过 SDK 提交 RunSpec | 提前校验 Environment、Agent、Backend、Model、Tools、Scorer、Limits 及组合兼容性 |
+| 运行配置 | 填写 run.yaml，或通过 SDK 提供等价运行配置 | 提前校验 Environment、Agent、Backend、Model、Tools、Scorer、Limits 及组合兼容性 |
 | 模型服务 | 在模型配置中提供评测端点；训练时由框架提供推理服务 | Worker 经统一模型入口调用；Agent 不加载模型权重 |
 | 执行结果 | 查询或订阅运行结果 | 返回状态、回答或产物、评分、轨迹引用与用量；失败时返回明确错误 |
 
@@ -74,7 +74,7 @@ UEnv 负责执行与评分，Trainer 负责优化器、梯度更新和模型参�
 |---|---|
 | 选择配置 | 选择 GSM8K 的 Environment/Scorer、PlainAgent、Process 后端和模型端点；max_generations=1、tools=[] |
 | 转换数据 | Gsm8kAdapter 把 question 转为 Gsm8kInput.instruction，把 answer 放进 Gsm8kPrivateData |
-| 组装请求 | prepare 创建公开 TaskSpec，Bridge 将它与 private_data、run_id 组成 EpisodeRequest |
+| 组装请求 | prepare 创建公开 TaskSpec，Bridge 将它与 private_data 组成 EpisodeRequest，再与 RunSpec 一起放入 BatchRequest |
 | 解析与派发 | Server 固定组件版本和预算，产生 ExecutionPlan，并交给满足要求的 Worker |
 | 运行 Agent | Gsm8kEnvironment 返回题目观测；PlainAgent 经 Worker 调用一次模型。假设模型回答“5” |
 | 收集与评分 | Environment.finalize 返回最终 Outcome；Worker 固定内容，再调用 Gsm8kScorer，得到 success=true、reward=1 |
@@ -94,7 +94,7 @@ UEnv 负责执行与评分，Trainer 负责优化器、梯度更新和模型参�
 
 完整返回还包括执行身份、用量、清理状态和 trajectory_ref；按引用读取的轨迹包含该次模型输入输出、评分及终态。
 
-可对应查看 [原始样本](../reference/datasets/gsm8k/tests/cases.jsonl)、[完整公开配置](../reference/runs/gsm8k.yaml)、[标准任务](../reference/generated/episodes/gsm8k/task.json)、[内部请求](../reference/generated/episodes/gsm8k/episode_request.json) 和 [解析后的计划](../reference/generated/episodes/gsm8k/execution_plan.json)。这些文件展示同一份数据的不同阶段，用户不编辑生成文件。
+可对应查看 [原始样本](../reference/datasets/gsm8k/tests/cases.jsonl)、[完整公开配置](../reference/runs/gsm8k.yaml)、[标准任务](../reference/generated/episodes/gsm8k/task.json)、[批次提交](../reference/generated/episodes/gsm8k/batch_request.json)、[成员请求视图](../reference/generated/episodes/gsm8k/episode_request.json) 和 [解析后的计划](../reference/generated/episodes/gsm8k/execution_plan.json)。这些文件展示同一份数据的不同阶段，用户不编辑生成文件。
 
 ### 2.4 运行与查询接口
 
@@ -108,9 +108,9 @@ uenv run cancel RUN_ID
 uenv trajectory export --run RUN_ID --sample SAMPLE_ID --format jsonl
 ```
 
-CLI 调用 Bridge 读取 run.yaml；SDK 提供配置对象时也使用同一配置函数，按声明补齐默认值并校验为完整 RunSpec，通过 create_run 提交给 Server 保存。随后通过 submit_batch 提交包含 EpisodeRequest 的 BatchRequest，各任务以 run_id 引用该配置；Server 结合二者生成执行计划。Server 不接收 YAML 文件，Worker 不重新读取用户配置。CLI 不提供另一套字段覆盖参数；提交前可用 `--dry-run` 查看展开结果。包不会隐式选择 Agent 或 Backend。具体填写方法统一见[用户指南第 2 节](guides/user_guide.md#2-填写运行配置)。
+CLI 调用 Bridge 读取 run.yaml；SDK 对象使用同一配置补值和校验函数。Bridge 将完整 RunSpec 与多条 EpisodeRequest 一次提交为 BatchRequest，不先注册配置。Server 校验并保存配置与任务，逐条生成执行计划；同一 run_id 的完整配置不同则拒绝。CLI 不提供另一套字段覆盖参数，提交前可用 `--dry-run` 查看展开结果。具体填写方法见[用户指南第 2 节](guides/user_guide.md#2-填写运行配置)。
 
-Python 客户端提供 `UEnvClient.create_run(RunSpec)`、`submit_batch(tasks)`、`get_run(run_id)`、`get_results(run_id, sample_id)`、`watch_results(run_id)`、`cancel_run(run_id)`、`load_trajectories(run_id, sample_id)`。同一样本可有多个 episode，因此结果查询返回列表；SDK 用返回的执行身份定位具体结果，不任取一个，也不依赖完成顺序。
+Python 客户端提供 `UEnvClient.submit_batch(tasks, run_spec)`、`get_run(run_id)`、`get_results(run_id, sample_id)`、`watch_results(run_id)`、`cancel_run(run_id)`、`load_trajectories(run_id, sample_id)`。同一样本可有多个 episode，因此结果查询返回列表；SDK 用返回的执行身份定位具体结果，不任取一个，也不依赖完成顺序。
 
 ## 3. 系统组成与部署
 
@@ -180,8 +180,8 @@ sequenceDiagram
   participant Q as Scorer
   U->>B: 样本与运行配置
   B->>B: 准备标准任务
-  B->>S: 提交请求
-  S->>S: 校验并持久化，形成计划
+  B->>S: 一次提交 BatchRequest(run_spec, episodes)
+  S->>S: 校验配置复用与任务，事务保存，逐条形成计划
   S-->>B: 接收凭据
   S->>W: 派发执行计划
   W->>W: 准备环境与工具，取得初始观测
@@ -234,24 +234,25 @@ flowchart TB
   CHECK --> READY[标准化样本就绪<br/>可保存为不含运行配置的 JSONL]
   READY -->|可选：发布数据| SAVE[Hub 保存独立数据 revision<br/>登记文件、样本索引和访问权限]
   READY --> BUILD[Bridge 组装 EpisodeRequest]
-  RUN[RunSpec：本次 Agent、后端、模型<br/>工具、Scorer、作业用途和预算] --> BUILD
-  BUILD --> SUBMIT[按第 4.3 节提交任务]
+  RUN[RunSpec：本次 Agent、后端、模型<br/>工具、Scorer、作业用途和预算] --> BATCH[组装 BatchRequest.run_spec 与 episodes]
+  BUILD --> BATCH
+  BATCH --> SUBMIT[按第 4.3 节提交任务]
 ```
 
 1. **注册包，再选择角色。**已有包直接使用精确版本；新增或修改实现时才校验、发布新代码版本。发布服务把数据集 PackageManifest 的 Adapter/Environment/Scorer 入口、角色配置 schema、任务 schema 和运行要求登记到组件目录；独立 Agent 和工具分别登记 AgentManifest、ToolSpec。运行时没有独立的 `package` 选择字段：用户只填写 `RunSpec.environment` 和 `RunSpec.scorer`。两者通常引用同一个数据集包，系统按角色取得其中不同的 Environment/Scorer 类；包内声明不替用户选择 Agent 或 Backend。图中校验失败均直接报错，不进入发布或提交。
 2. **确定样本来源。**用户自带原始数据时调用 Adapter，再由 prepare 构建 task/private_data；自带标准化 JSONL 或使用 Hub 已有样本时直接读取和校验，不重复转换。Hub 输入包含固定数据版本与样本选择，不能同时带另一份内容要求覆盖。
 3. **得到可复用数据。**标准化样本使用同一个 task/private_data 结构；prepare 负责固定身份、摘要和引用。文件不包含 run_id、episode_id 或执行配置，训练和评测可复用，私有材料不进入 Agent 可见的 TaskSpec。
 4. **按需发布数据。**可保留本地使用，也可独立发布到 Hub；发布前固定数据 revision、文件 digest 和读取权限，再登记索引。代码不变时无需重新发包，数据内容改变时不能覆盖旧 revision。数据发布本身不启动任务。
-5. **提交本次任务。**Bridge 将准备好的样本与 RunSpec 组合，生成本次请求身份并提交。Server 和 Worker 接收相同的标准结构，Worker 不再从另一个 catalog 补齐或替换题目。
+5. **提交本次任务。**Bridge 将准备好的样本组装成 EpisodeRequest，与一份 RunSpec 一起放入 BatchRequest 并提交。Server 从批次生成逐任务 ExecutionPlan，再通过 DispatchRequest 派发；Worker 不再从另一个 catalog 补齐或替换题目。
 
 ### 4.3 Bridge：提交与消费结果
 
-创建 run 时，文件输入只多一个 YAML 读取步骤；它和 SDK 对象输入共用 Bridge 配置补值、类型校验及 RunSpec 提交函数。默认值只在契约或组件模型声明，完成后不允许 Server/Worker 再补值。下面的批次流程使用已经创建的完整 RunSpec，不在每条任务中重新读取文件。
+文件输入只多一个 YAML 读取步骤；它和 SDK 对象共用 Bridge 配置补值、校验和批次提交函数。Bridge 把完整配置写入 BatchRequest.run_spec，把任务写入 episodes，一次提交。默认值只在契约或组件模型声明，Server/Worker 不再补值。
 
 ```mermaid
 flowchart TB
   CLIENT[VerlAdapter.run_batch<br/>或 UEnvClient.submit_batch] --> BRIDGE[BridgeService.submit_batch]
-  INPUT[TaskSpec、RunSpec、可选 private_data] --> BUILD[build_episode_request / build_batch_request<br/>建立请求与样本身份]
+  INPUT[TaskSpec、RunSpec、可选 private_data] --> BUILD[build_episode_request / build_batch_request<br/>一份 run_spec，多条 episodes，建立身份]
   BRIDGE --> BUILD
   BUILD --> CHECK{请求契约校验通过？}
   CHECK -->|否| ERROR[返回输入错误]
@@ -266,7 +267,7 @@ flowchart TB
 
 图中是任务提交与结果返回。训练时模型调用的完整路径是 `Agent → Worker AgentRuntime/ModelProvider → ModelGateway → Trainer 推理服务`；评测则由同一个 Worker ModelProvider 连接外部模型端点。Bridge 的提交函数不生成回答；同步或异步只改变等待、消费结果的方式。
 
-build_episode_request/build_batch_request 函数接收已标准化的公开 TaskSpec、RunSpec 及可选 private_data。每个 EpisodeRequest 生成自己的 request_id 和 episode_id；整批只生成一个 batch_id，各项复用该 batch_id 并用 sample_index 定位。BatchRequest 不再另设同名 request_id，BatchReceipt 原样返回 batch_id。评分依据只进入 EpisodeRequest.private_data，不能混入 TaskSpec.input。不从多个旧字段猜测 question/answer，不判断 SWE/Code。源字段转换只发生在准备阶段。
+build_episode_request 接收标准公开 TaskSpec、种子及可选 private_data，生成成员 request_id/episode_id。build_batch_request 将一份完整 RunSpec 放入 run_spec，将这些成员放入 episodes；整批只生成一个 batch_id，各成员复用它并用从 0 开始的 sample_index 定位。EpisodeRequest 没有 run_id 或配置覆盖字段，ExecutionPlan.run_id 从批次 RunSpec 派生。BatchReceipt 返回 batch_id 及已接纳的 episode_ids。原始字段转换仅发生在准备阶段，不在请求构建中判断数据集或猜测字段。
 
 用户自带数据与 Hub 数据均先按第 9 章在准备入口确定唯一内容来源，到上述函数时已是相同的 task/private_data；Server 和 Worker 不再分别补齐同一份样本字段。
 
@@ -278,12 +279,14 @@ build_episode_request/build_batch_request 函数接收已标准化的公开 Task
 
 ```mermaid
 flowchart TB
-  RPC[EpisodeRpc.submit_batch] --> SERVICE[EpisodeService.submit<br/>校验请求及幂等内容]
+  RPC[EpisodeRpc.submit_batch<br/>BatchRequest] --> CONFIG{批次配置和身份一致？}
+  CONFIG -->|否| REJECT[返回校验或配置冲突错误]
+  CONFIG -->|是，逐条处理| SERVICE[EpisodeService.submit<br/>校验请求及幂等内容]
   SERVICE --> EXIST{同一幂等键是否已存在？}
   EXIST -->|内容不同| CONFLICT[返回 CONFLICT]
   EXIST -->|内容相同| ORIGINAL[返回原任务状态]
   EXIST -->|不存在| PLAN[PlanResolver.resolve<br/>校验兼容性，锁定唯一 ExecutionPlan]
-  PLAN --> SAVE[EpisodeRepository.create<br/>事务持久化并保证幂等]
+  PLAN --> SAVE[EpisodeRepository.create<br/>事务核验 run 配置并保存任务，保证幂等]
   SAVE --> ADMIT[AdmissionController.acquire<br/>按队列及并发上限接纳]
   ADMIT --> PLACE[PlacementScheduler.reserve<br/>选择满足能力和资源要求的 Worker]
   REGISTRY[WorkerRegistry<br/>能力与资源快照] --> PLACE
@@ -299,9 +302,9 @@ flowchart TB
 
 `EpisodeRpc.submit_batch()` -> `EpisodeService.submit()`：
 
-1. `validate_request()` 校验协议、RunSpec 与任务 schema；EpisodeService 在仓库事务中比较幂等内容，同 idempotency key 内容不同返回 CONFLICT。
-2. `PlanResolver.resolve()` 将请求和配置转换为 ExecutionPlan，以 Server 首次接纳时间和 limits.total_timeout_ms 生成唯一 deadline_at_ms，锁定所有明确选择组件的版本/digest，验证角色与 schema，生成唯一的 tools 表并汇总 required_capabilities。它只沿 `RunSpec.environment/scorer/...` 已选引用读取可信组件目录，不接收独立 PackageManifest 或某个 Worker 的 capabilities，也不在 Server 加载用户 Python 代码。Placement 在下一步根据计划要求选择 Worker。明确指定的实现不可无声回退；Worker 初始化 Environment、工具路由和 Agent SDK 后，在 `Environment.reset` 前分别核验可路由工具与模型可见工具。
-3. `EpisodeRepository.create()` 持久化任务；重复请求返回原任务状态。
+1. `validate_request()` 校验完整 BatchRequest：run_spec 唯一且完整，episodes 非空，成员身份不重复，batch_id/sample_index 一致。Server 按 run_spec.run_id 查找已保存配置，仅比较是否相同；不同返回 RUN_CONFIG_CONFLICT，不从旧记录补齐本次请求。然后逐条校验任务及幂等内容；同 request_id 关联的任务或 run_id 不同返回 CONFLICT。
+2. `PlanResolver.resolve()` 逐条使用 batch.episodes 中的任务和同一 batch.run_spec 转换为 ExecutionPlan，以 Server 首次接纳时间和 limits.total_timeout_ms 生成唯一 deadline_at_ms，锁定所有明确选择组件的版本/digest，验证角色与 schema，生成唯一的 tools 表并汇总 required_capabilities。它只沿 `RunSpec.environment/scorer/...` 已选引用读取可信组件目录，不接收独立 PackageManifest 或某个 Worker 的 capabilities，也不在 Server 加载用户 Python 代码。Placement 在下一步根据计划要求选择 Worker。明确指定的实现不可无声回退；Worker 初始化 Environment、工具路由和 Agent SDK 后，在 `Environment.reset` 前分别核验可路由工具与模型可见工具。
+3. `EpisodeRepository.create()` 在同一事务中核验或首次保存不可变 RunSpec，并保存本次接纳的任务和批次关系。事务内重新比较配置，防止并发提交各自通过检查后覆盖；重复任务返回原状态，不重置截止时间或再次执行。保存配置是批次处理的一部分，不是独立网络请求。
 4. `AdmissionController.acquire()` 实施队列与并发上限。
 5. `WorkerRegistry` 提供能力/资源快照；`WorkerRegistration.components` 是 Environment、Agent、Scorer、Tool、Backend 等所有已安装可执行组件的唯一清单，不再另设 `backends` 清单。`capabilities` 表示 Worker 能提供的运行能力；`capacity` 是总并发 episode 槽位，Heartbeat.available_slots 是当前剩余槽位；`resource_capacity` 是 CPU/内存/存储总量，单 episode 的资源申请只来自 `BackendSpec.resources`。`PlacementScheduler.reserve()` 同时核验计划锁定组件、required_capabilities、槽位和当前资源余量。
 6. `LeaseService.issue()` 只为本次 attempt 生成 lease_id、epoch、expires_at_ms 与 token；token 将结果绑定到该租约且不得进入组件或公开轨迹。LeaseService 不生成或延长 episode deadline。`DispatchClient.start()` 发送统一 DispatchRequest，其中 remaining_timeout_ms 是根据 plan.deadline_at_ms 在派发时计算的只减上限，consumed_usage 是此前 attempt 已确认的累计用量。
@@ -392,8 +395,9 @@ Worker 每个 attempt 调用一次 AgentRunner.run，Agent 内部可以多次生
 |---|---|---|
 | PreparedSample | DatasetAdapter | prepare 用来组装标准数据，仅在准备阶段使用 |
 | TaskSpec | prepare | Environment、Agent、Scorer 读取公开任务 |
-| RunSpec | 用户经 Bridge 提交 | Server 保存用户选择，多个任务可复用 |
-| EpisodeRequest | Bridge | Server 读取本次任务、run_id 和可选 private_data |
+| RunSpec | 用户经 Bridge 组装 | 仅作为 BatchRequest.run_spec 提交，Server 保存本批共用的选择 |
+| EpisodeRequest | Bridge | Server 读取本次任务、种子和可选 private_data |
+| BatchRequest | Bridge | Server 一次接收一份 run_spec 和多条 episodes |
 | ExecutionPlan | Server | Worker 读取本次 attempt 的最终配置与固定输入 |
 | DispatchRequest | Server | Worker 读取计划及派发租约、剩余时间、累计用量 |
 | ScoreInput | Worker | Scorer 读取任务、候选、评分快照和可选 private_data |
@@ -403,8 +407,9 @@ Worker 每个 attempt 调用一次 AgentRunner.run，Agent 内部可以多次生
 flowchart LR
   A[Adapter返回PreparedSample] --> T[prepare生成TaskSpec与private_data]
   T --> E[Bridge生成EpisodeRequest]
-  R[用户RunSpec] --> P[Server生成ExecutionPlan]
-  E --> P
+  R[用户RunSpec] --> B[BatchRequest.run_spec 与 episodes]
+  E --> B
+  B --> P[Server逐条生成ExecutionPlan]
   P --> D[DispatchRequest携带计划与派发授权]
   D --> W[Worker执行]
   W --> O[EpisodeResult]
@@ -432,12 +437,13 @@ TaskSpec.input 使用包内定义的类型。GSM8K 示例的公开内容为 `ins
 
 ### 5.3 用户配置如何变为执行计划
 
-RunSpec 保存用户选择，EpisodeRequest 指定这一次执行哪个任务。Server 校验二者后，**转换生成** ExecutionPlan；计划不再嵌套原始请求与 RunSpec，也不再附带另一份组件选择或工具配置。
+BatchRequest.run_spec 保存本批共用的用户选择，episodes 中各 EpisodeRequest 指定执行哪个任务。Server 校验批次后，**转换生成** ExecutionPlan；计划不再嵌套原始请求与 RunSpec，也不再附带另一份组件选择或工具配置。
 
 | 对象 | 由谁产生、谁使用 | 范围 |
 |---|---|---|
-| RunSpec | 用户经 Bridge 提交，Server 保存 | 一次 run 共用的 environment、agent、backend、model、tools、scorer、limits 等配置 |
-| EpisodeRequest | Bridge 提交给 Server | run_id、episode_id、task、seed、可选 private_data；以及提交幂等与批次定位字段 |
+| RunSpec | 用户填写，Bridge 放入 BatchRequest.run_spec，Server 保存 | 一次 run 共用的 environment、agent、backend、model、tools、scorer、limits 等配置 |
+| EpisodeRequest | Bridge 放入 BatchRequest.episodes | episode_id、task、seed、可选 private_data；以及提交幂等与批次定位字段，不携带运行配置 |
+| BatchRequest | Bridge 一次提交给 Server | batch_id、唯一 run_spec、非空 episodes 列表 |
 | ExecutionPlan | Server 生成，Worker 使用 | 本次 attempt 唯一生效的配置、公开任务、受控评分依据、精确组件引用和截止时间 |
 
 RunSpec 的 environment 到计划中仍叫 environment，tools 仍叫 tools；变化的是组件版本已锁定、工具执行路由已核验，字段的含义和名字不变。Worker 只读取计划，不能再查询 RunSpec 重新选组件，也不能用另一张 components 表覆盖角色配置。同一组件被多个角色使用时，引用必须完全一致。
@@ -446,7 +452,7 @@ RunSpec 的 environment 到计划中仍叫 environment，tools 仍叫 tools；�
 
 同一 run 共享一套环境与评分组件配置。不同样本可以共享它，但都必须满足这些组件支持的任务 schema；若 GSM8K 与 SWE 需要不同专属 Environment/Scorer，就创建不同 run，由 Bridge 同时管理。Worker 不能根据 dataset 名称临时更换组件。同一任务多次采样使用不同 episode_id。正常执行只有 `attempt_id=1`；发生允许重试的基础设施故障时，Server 保留 episode_id 并增加 attempt_id，用户不填写该字段。
 
-Server 保留原始 RunSpec、EpisodeRequest 用于审计、幂等与批次定位。request_id、batch_id、sample_index 不进入执行计划；retry 由 Server 消费，不向 Worker 提供第二个重试决策入口。计划中的 task 不含私有材料引用；完整计划不能直接传给 Environment/Agent 或写入公开轨迹。
+Server 随批次保存 RunSpec、EpisodeRequest 及批次关联，用于审计、幂等与恢复。同一 run_id 的完整 RunSpec 不可变，后续批次必须再次携带相同配置；不一致拒绝，变更配置需使用新的 run_id。任务 request_id 的幂等比较必须包含所属 run_id，不能借复用身份切换配置。request_id、batch_id、sample_index 不进入执行计划；retry 由 Server 消费，不向 Worker 提供第二个重试决策入口。计划中的 task 不含私有材料引用；完整计划不能直接传给 Environment/Agent 或写入公开轨迹。
 
 `purpose` 与 `training` 的组合没有第三种解释：`purpose=training` 时 `training` 必填，`purpose=evaluation` 时 `training` 必须省略。purpose 只选择结果消费方；training 只约束训练所需的模型版本和 token 轨迹，不改变 Scorer、ScoreInput 或 reward 算法。
 
@@ -994,7 +1000,7 @@ PackageManifest 必须能在下载和执行组件代码之前读取，用于校�
 
 ### 9.3 标准数据格式与材料权限
 
-标准化 JSONL 每行只包含 `task: TaskSpec` 和可选 `private_data: TypedConfig`，复用现有字段定义，不新增一套样本类。数据身份统一使用 task.dataset 的 id/revision/split/subset 和 task.sample_id；行内不再重复这些字段。数据发布时固定 revision 和文件 digest，再生成数据索引；索引引用已固定文件的 ArtifactRef，revision 不定义为包含自身的索引文件摘要，避免循环计算。行内不保存 run_id、episode_id、Agent 或后端选择，运行时才与 RunSpec 组装 EpisodeRequest。私有内容存在时，整份 JSONL 按受限数据保存；Agent/Environment 只接收经过筛选的公开 TaskSpec，不能直接读取原文件。
+标准化 JSONL 每行只包含 `task: TaskSpec` 和可选 `private_data: TypedConfig`，复用现有字段定义，不新增一套样本类。数据身份统一使用 task.dataset 的 id/revision/split/subset 和 task.sample_id；行内不再重复这些字段。数据发布时固定 revision 和文件 digest，再生成数据索引；索引引用已固定文件的 ArtifactRef，revision 不定义为包含自身的索引文件摘要，避免循环计算。行内不保存 run_id、episode_id、Agent 或后端选择，运行时先组装 EpisodeRequest，再与 RunSpec 一起放入 BatchRequest。私有内容存在时，整份 JSONL 按受限数据保存；Agent/Environment 只接收经过筛选的公开 TaskSpec，不能直接读取原文件。
 
 公开任务和 private_data 配对保存，模型只看到公开任务。ArtifactRef 是文件引用，保存定位及完整性校验所需信息；它不代表自动获得读取权限。隐藏测试即使通过引用传递，仍只授予评分路径读取能力。
 
@@ -1013,7 +1019,7 @@ flowchart TB
   CHOOSE[用户选择 Hub 数据版本和样本] --> READ[按固定版本从 Hub 读取样本]
   HUB[Hub：版本、索引与文件引用] --> READ
   READ --> PREP
-  PREP --> REQUEST[统一 EpisodeRequest + RunSpec]
+  PREP --> REQUEST[统一 BatchRequest<br/>run_spec 与 episodes]
   REQUEST --> SERVER[Server：校验并锁定 ExecutionPlan]
   HUB -->|提供代码和资源版本信息| SERVER
   SERVER --> WORKER[Worker：接收本次样本与计划]

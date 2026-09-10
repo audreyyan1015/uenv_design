@@ -29,30 +29,27 @@ flowchart LR
   YAML[run.yaml] --> READ[CLI 调用 Bridge 读取 YAML]
   READ --> NORMALIZE[Bridge 共用配置函数<br/>补齐声明默认值并校验]
   SDK[SDK 提供配置对象] --> NORMALIZE
-  NORMALIZE --> CREATE[Bridge 提交 RunSpec<br/>创建 run]
-  CREATE --> SAVE[Server 校验并保存 RunSpec]
-  SAVE -->|确认 run_id| BUILD[Bridge 组装 EpisodeRequest<br/>通过 run_id 引用配置]
-  TASK[已准备的任务与可选私有材料] --> BUILD
-  BUILD --> SUBMIT[Bridge 提交 BatchRequest<br/>包含一条或多条 EpisodeRequest]
-  SUBMIT --> SERVER[Server 读取对应 RunSpec<br/>校验任务并生成 ExecutionPlan]
-  SAVE -.读取已保存配置.-> SERVER
+  NORMALIZE --> BATCH[Bridge 组装 BatchRequest<br/>一份 run_spec 与多条 episodes]
+  TASK[已准备的任务与可选私有材料] --> BATCH
+  BATCH --> SERVER[Server 校验并保存配置与任务<br/>为每条任务生成 ExecutionPlan]
   SERVER --> WORKER[派发给 Worker 执行]
 ```
 
-Bridge 与 Server 之间有两个明确步骤：
+Bridge 只调用一次 submit_batch：BatchRequest.run_spec 保存这一批共用的完整 RunSpec，episodes 保存一条或多条 EpisodeRequest。单条任务也使用同一接口，只含一个成员；没有前置的配置注册请求。
 
-1. **创建 run**：Bridge 通过 create_run 提交完整 RunSpec，Server 校验并保存本次运行配置。
-2. **提交任务**：Bridge 通过 submit_batch 提交 BatchRequest，其中每条 EpisodeRequest 携带任务、可选私有材料和 run_id。Server 按 run_id 读取已经保存的 RunSpec，为每条任务生成执行计划。
+同一批次只允许一套运行配置。EpisodeRequest 不携带 RunSpec、run_id 或 Agent/模型/预算覆盖；它的运行身份来自 BatchRequest.run_spec.run_id。需要不同执行配置时分别提交批次，并使用不同 run_id。任务自己的数据、种子和样本身份仍可不同。
 
-因此，任务提交接口接收 EpisodeRequest 所在的批次请求，不能仅提交 RunSpec 就开始执行；EpisodeRequest 也不内嵌另一份 RunSpec。Server 不读取用户 YAML 文件，Worker 接收包含 ExecutionPlan 的派发请求。CLI 不提供同一字段的另一套覆盖参数，环境变量也不能覆盖已提交配置。运行身份在创建 run 后由 SDK 复用；九份设计示例显式给出稳定 run_id，便于对应生成夹具。
+Server 在接收批次时保存配置与任务；后续批次沿用同一 run_id 时，补齐后的完整 RunSpec 必须一致，否则返回 RUN_CONFIG_CONFLICT，不覆盖已保存配置。Server 比较旧配置是为了拒绝冲突，生成计划仍只读取本次 BatchRequest.run_spec。配置变更使用新的 run_id。
 
-上述 CLI/生产 SDK 尚未完成接入。本地用 reference/package_loader.py 的 expand_run 演示两种输入共用的补值与校验过程，不能把夹具生成器当作已部署 Bridge。
+Server 不读取 YAML 文件，Worker 接收包含 ExecutionPlan 的派发请求。CLI 和环境变量不能另行覆盖已提交配置。run_id 由调用方或 SDK 在首次提交前确定并复用，无需先请求 Server 创建它；九份设计示例显式给出稳定值，便于对应生成夹具。
+
+可查看[GSM8K 批次请求示例](../../reference/generated/episodes/gsm8k/batch_request.json)，其中 run_spec 和 episodes 就是一次提交的完整内容。以上是统一目标接口；当前本地已有批次 schema、九份批次示例和 Rust 批次校验，真正的 Bridge/RPC、数据库事务与并发幂等仍待接入。
 
 ### 2.2 每组字段负责什么
 
 | 字段 | 谁填写 | 谁读取及具体作用 |
 |---|---|---|
-| run_id | 调用方或创建 run 的 SDK；同一 run 复用 | Server 关联配置与结果，Bridge 按它提交和查询 |
+| run_id | 调用方或 SDK 在首次提交前确定；同一配置跨批次复用 | Server 关联配置与结果，Bridge 按它提交和查询 |
 | purpose | 运行用户或训练框架 | Bridge/调用方选择评测汇总或训练消费；不改变评分 |
 | environment、scorer | 运行用户 | Server 分别锁定角色；Worker 加载环境规则和单条评分实现 |
 | agent | 运行用户 | Server 校验接口，Worker 启动所选智能体 |
@@ -106,7 +103,7 @@ uenv trajectory export --run RUN_ID --sample SAMPLE_ID --format jsonl
 
 RUN_ID 使用提交返回的运行标识，SAMPLE_ID 使用样本标识。运行前可用 --dry-run 检查展开结果；CLI 不提供另一套 Agent、模型或预算覆盖参数。
 
-需要程序调用时，客户端提供创建 run、提交批次、查询/订阅结果、取消和读取轨迹的接口，签名见[主方案第 2.4 节](../uenv_design.md#24-运行与查询接口)。同一样本可能执行多次，因此结果与轨迹查询返回列表，不能默认只取一项。
+需要程序调用时，客户端通过 submit_batch(tasks, run_spec) 一次提交任务与配置，并提供查询/订阅结果、取消和读取轨迹的接口，签名见[主方案第 2.4 节](../uenv_design.md#24-运行与查询接口)。同一样本可能执行多次，因此结果与轨迹查询返回列表，不能默认只取一项。
 
 ## 4. 理解结果
 
