@@ -108,7 +108,7 @@ uenv run cancel RUN_ID
 uenv trajectory export --run RUN_ID --sample SAMPLE_ID --format jsonl
 ```
 
-run.yaml 展开为严格 RunSpec，CLI 不再提供另一套字段覆盖参数；提交前可用 `--dry-run` 查看展开结果。包不会隐式选择 Agent 或 Backend。
+CLI 调用 Bridge 读取 run.yaml；SDK 提供配置对象时也使用同一配置函数，按声明补齐默认值并校验为完整 RunSpec，再提交 Server。Server 不接收 YAML 文件，Worker 不重新读取用户配置。CLI 不提供另一套字段覆盖参数；提交前可用 `--dry-run` 查看展开结果。包不会隐式选择 Agent 或 Backend。具体填写方法统一见[用户指南第 2 节](guides/user_guide.md#2-填写运行配置)。
 
 Python 客户端提供 `UEnvClient.create_run(RunSpec)`、`submit_batch(tasks)`、`get_run(run_id)`、`get_results(run_id, sample_id)`、`watch_results(run_id)`、`cancel_run(run_id)`、`load_trajectories(run_id, sample_id)`。同一样本可有多个 episode，因此结果查询返回列表；SDK 用返回的执行身份定位具体结果，不任取一个，也不依赖完成顺序。
 
@@ -245,6 +245,8 @@ flowchart TB
 5. **提交本次任务。**Bridge 将准备好的样本与 RunSpec 组合，生成本次请求身份并提交。Server 和 Worker 接收相同的标准结构，Worker 不再从另一个 catalog 补齐或替换题目。
 
 ### 4.3 Bridge：提交与消费结果
+
+创建 run 时，文件输入只多一个 YAML 读取步骤；它和 SDK 对象输入共用 Bridge 配置补值、类型校验及 RunSpec 提交函数。默认值只在契约或组件模型声明，完成后不允许 Server/Worker 再补值。下面的批次流程使用已经创建的完整 RunSpec，不在每条任务中重新读取文件。
 
 ```mermaid
 flowchart TB
@@ -450,7 +452,7 @@ Server 保留原始 RunSpec、EpisodeRequest 用于审计、幂等与批次定�
 
 `trajectory_retention_days` 也是 Server/ArtifactStore 的保存策略，只在 RunSpec 出现并由服务端存储管理消费，不复制到 ExecutionPlan。Worker 始终记录完整的标准事件；summary 只是查询端可生成的派生视图，不是执行配置，也不能改变训练事实。
 
-RunSpec 按 Environment、Agent、Backend、Model、Tools、Scorer、Limits 分组。用户在这一处选择组件；Server 将版本、工具路由、镜像与预算解析到 ExecutionPlan，Worker 不重新读取用户文件选择组件。后端镜像优先级唯一由第 7.3 节定义。
+RunSpec 按 Environment、Agent、Backend、Model、Tools、Scorer、Limits 分组。公共字段名、含义和默认值不随数据集改变，组件专有 config 必须有类型声明，不能重复公共执行参数。用户在这一处选择组件；Server 将版本、工具路由、镜像与预算解析到 ExecutionPlan，Worker 不重新读取用户文件选择组件。后端镜像优先级唯一由第 7.3 节定义。
 
 每条 task 可以多次采样，产生不同 episode_id；正常 attempt_id=1。基础设施重试保留 episode_id，更新 attempt_id。派发授权与剩余预算位于 DispatchRequest，不成为第二套执行配置；具体恢复规则见第 10 章。
 

@@ -358,7 +358,7 @@ class ContractTests(unittest.TestCase):
         from uenv.sdk import Observation
 
         class CustomConfig(UEnvModel):
-            prefix: str
+            prefix: str = "Question: "
 
         class CustomAction(UEnvModel):
             increment: int
@@ -379,7 +379,9 @@ class ContractTests(unittest.TestCase):
             registry.validate("PackageManifest", manifest)
             public_run = load_yaml(ROOT / "reference/runs/gsm8k.yaml")
             public_run["environment"]["config"] = {"prefix": "Question: "}
-            run = expand_run(public_run, manifest, CATALOG)
+            run = expand_run(public_run, manifest, CATALOG, registry)
+            public_run["environment"].pop("config")
+            self.assertEqual(expand_run(public_run, manifest, CATALOG, registry), run)
             registry.validate("RunSpec", run)
             environment = ConfiguredEnvironment(run["environment"]["config"]["data"])
             observation = environment.reset(component_task("gsm8k"), None)
@@ -389,6 +391,58 @@ class ContractTests(unittest.TestCase):
             run["environment"]["config"]["data"]["prefix"] = 42
             with self.assertRaises(ValidationError):
                 registry.validate("RunSpec", run)
+
+    def test_public_run_defaults_preserve_explicit_values_and_input(self):
+        for name in PACKAGES:
+            with self.subTest(dataset=name):
+                manifest = load(GENERATED_ROOT / "packages" / name / "manifest.json")
+                public = load_yaml(ROOT / "reference/runs" / f"{name}.yaml")
+                before = copy.deepcopy(public)
+                expanded = expand_run(public, manifest, CATALOG)
+                self.assertEqual(public, before)
+                explicit = copy.deepcopy(expanded)
+                explicit.pop("schema_version")
+                for role in ("environment", "agent", "scorer", "backend"):
+                    explicit[role]["config"] = explicit[role]["config"]["data"]
+                for tool in explicit["tools"]:
+                    tool["config"] = tool["config"]["data"]
+                self.assertEqual(expand_run(explicit, manifest, CATALOG), expanded)
+                explicit["model"]["generation"]["temperature"] = 0.5
+                explicit["model"]["max_transport_retries"] = 0
+                explicit["limits"]["max_tool_calls"] = 0
+                explicit["retry"]["max_attempts"] = 2
+                changed = expand_run(explicit, manifest, CATALOG)
+                self.assertEqual(changed["model"]["generation"]["temperature"], 0.5)
+                self.assertEqual(changed["model"]["max_transport_retries"], 0)
+                self.assertEqual(changed["limits"]["max_tool_calls"], 0)
+                self.assertEqual(changed["retry"]["max_attempts"], 2)
+
+    def test_public_run_rejects_removed_fields_and_invalid_values(self):
+        manifest = load(GENERATED_ROOT / "packages/swe_verified/manifest.json")
+        baseline = load_yaml(ROOT / "reference/runs/swe_verified.yaml")
+        for role, config in (("agent", {"sdk_iteration_limit": 30}),
+                             ("agent", {"history_policy": "sdk"}),
+                             ("agent", {"max_rounds": 30}),
+                             ("environment", {"total_timeout_ms": 10}),
+                             ("backend", {"runtime_profile": "legacy"}),
+                             ("agent", None)):
+            changed = copy.deepcopy(baseline)
+            changed[role]["config"] = config
+            with self.subTest(role=role, config=config), self.assertRaises(ValidationError):
+                expand_run(changed, manifest, CATALOG)
+        for value in (None, False, -1, "0.5"):
+            changed = copy.deepcopy(baseline)
+            changed["model"]["generation"] = {"temperature": value}
+            with self.subTest(temperature=value), self.assertRaises(ValidationError):
+                expand_run(changed, manifest, CATALOG)
+
+    def test_wire_validation_does_not_apply_submission_defaults(self):
+        run = generated("gsm8k", "run_spec.json")
+        run["model"]["generation"].pop("temperature")
+        before = copy.deepcopy(run)
+        with self.assertRaises(ValidationError):
+            validate("RunSpec", run)
+        self.assertEqual(run, before)
 
     def test_agent_pool_fields_are_rejected(self):
         for field in ("pool_id", "agent_pool_id", "placement"):

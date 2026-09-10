@@ -2,15 +2,8 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "uenv://schemas/vnext/ContainerBackendConfig",
   "type": "object",
-  "description": "Docker/Podman 后端配置；引擎种类独立于镜像",
-  "properties": {
-    "runtime_profile": {
-      "type": "string",
-      "description": "管理员预注册的引擎连接配置名；不得携带网络、挂载或身份权限"
-    }
-  },
-  "required": [
-    "runtime_profile"
-  ],
+  "description": "Docker/Podman 无额外用户参数；引擎连接属于 Worker 部署配置，镜像选择位于 runtime.image",
+  "properties": {},
+  "required": [],
   "additionalProperties": false
 }

@@ -2,6 +2,16 @@
 
 验证日期：2026-09-10。验证对象仅为 `architecture-review-0905/design`。
 
+## run.yaml 配置清理复验（2026-09-10）
+
+- 删除 ContainerBackendConfig.runtime_profile，以及 OpenHandsAgentConfig.history_policy、sdk_iteration_limit；同步九份运行示例、生成契约与计划。Process 的 runtime_profile 继续专指本机运行环境。
+- 公共提交默认值只在核心契约或组件模型声明。expand_run 使用 SchemaRegistry.apply_defaults 补值后校验；显式参数保持不变，非法 null/类型、旧字段和已知同义入口被拒绝。Server/Worker 使用的普通 validator 仍要求完整字段，不自动补默认值。
+- 九份公开示例省略默认资源、模型生成、重试、保留期和默认组件参数。逐份比较解析后的 RunSpec/ExecutionPlan：除明确删除的组件字段及其 plan_digest 外，实际配置值与清理前相同。
+- 自定义角色配置可从 models.py 的默认值生成 schema，并通过同一提交函数补齐；文件读取后的配置与程序直接提供的等价完整配置得到相同 RunSpec，输入对象不被修改。
+- 三个生成脚本成功。全部 32 项验证测试通过，含 21 项 Rust 控制测试的执行入口；新增检查覆盖默认值、非法参数和完整传输对象的严格校验。
+- 用户指南第 2 节集中解释文件/SDK/Bridge、字段分组、默认值、组件扩展和后端切换。72 个本地链接及标题锚点、26 个 Mermaid 代码块边界检查通过；未逐图渲染。git diff --check 通过。
+- 修改仅限 design 参考实现、契约、示例和文档；未修改生产源码。真实 Bridge/CLI、OpenHands 迭代接入、模型、后端和 Hub 服务仍未验收；本次未重复 wheel 构建。构建缓存位于仓库外，未新增临时脚本。
+
 ## 文档分组与合并复验（2026-09-10）
 
 - docs 从 12 篇合并为 9 篇：主方案留在根目录，用户指南和数据集模板归入 guides，规则、迁移、参考实现和验证归入 development，字段字典与模块清单归入 generated。

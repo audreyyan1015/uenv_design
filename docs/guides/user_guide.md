@@ -18,23 +18,72 @@ uenv dataset prepare --package datasets/gsm8k@1.0.0 --input raw.jsonl --output t
 
 ## 2. 填写运行配置
 
-从[公开 GSM8K 运行配置](../../reference/runs/gsm8k.yaml)或[其他数据集示例](../../reference/runs)开始。run.yaml 是唯一用户执行配置入口，也可以由调用方构造等价 RunSpec；用户不编辑生成的 ExecutionPlan。
+本节是 run.yaml 的统一使用说明。所有数据集使用同一个模板；不维护 GSM8K 专用、SWE 专用等不同配置协议。可从[精简 GSM8K 示例](../../reference/runs/gsm8k.yaml)或[九份运行示例](../../reference/runs)开始。示例的组件选择和预算值不同，字段的含义不随数据集改变。
 
-| 想调整什么 | 填写位置 |
-|---|---|
-| 环境和评分实现 | environment、scorer |
-| 智能体 | agent |
-| 执行后端 | backend |
-| 模型服务地址和生成参数 | model |
-| 本次启用的工具 | tools |
-| 模型调用次数、总时限等预算 | limits |
-| 评测或训练 | purpose；training 仅在训练时填写 |
-| 显式覆盖运行镜像 | runtime.image |
-| 轨迹保存天数 | trajectory_retention_days |
+### 2.1 文件和 SDK 怎样交给 Bridge
 
-各组件的 config 直接填写公开参数，不填写 schema_ref。选择某个组件后，可查询它的参数类型；模型调用次数统一填写 limits.max_generations。单轮问答使用无工具 Agent，设 max_generations 为 1。
+run.yaml 保存在调用方的训练、评测或实验项目中，不属于数据集包，也不发布到 Hub。它是可选的文件输入方式；Python 调用方可以直接提供等价配置，由 SDK 构造 RunSpec。SDK 是 Bridge 的编程入口，不绕过 Bridge 另走执行链。
 
-更换 Agent 或 Backend 只改这份配置，不改数据集转换和评分代码。Docker/Podman 使用兼容镜像；Process 使用本机 runtime_profile。缺少能力或依赖时系统拒绝该组合，用户需要修正配置或部署依赖。镜像的填写位置、默认值和优先级统一见[主方案第 7.3 节](../uenv_design.md#73-镜像来源与唯一解析规则)。
+```mermaid
+flowchart LR
+  YAML[run.yaml] --> READ[CLI 调用 Bridge 读取 YAML]
+  READ --> NORMALIZE[Bridge 共用配置函数<br/>补齐声明默认值并校验]
+  SDK[SDK 提供配置对象] --> NORMALIZE
+  NORMALIZE --> RUN[完整 RunSpec]
+  RUN --> SERVER[Server 权威校验<br/>锁定 ExecutionPlan]
+  SERVER --> WORKER[Worker 按计划执行]
+```
+
+Server 接收结构化 RunSpec，不接收 YAML 文件路径；Worker 只接收执行计划。CLI 不提供同一字段的另一套覆盖参数，环境变量也不能覆盖已提交配置。运行身份在创建 run 后由 SDK 复用；九份设计示例显式给出稳定 run_id，便于对应生成夹具。
+
+上述 CLI/生产 SDK 尚未完成接入。本地用 reference/package_loader.py 的 expand_run 演示两种输入共用的补值与校验过程，不能把夹具生成器当作已部署 Bridge。
+
+### 2.2 每组字段负责什么
+
+| 字段 | 谁填写 | 谁读取及具体作用 |
+|---|---|---|
+| run_id | 调用方或创建 run 的 SDK；同一 run 复用 | Server 关联配置与结果，Bridge 按它提交和查询 |
+| purpose | 运行用户或训练框架 | Bridge/调用方选择评测汇总或训练消费；不改变评分 |
+| environment、scorer | 运行用户 | Server 分别锁定角色；Worker 加载环境规则和单条评分实现 |
+| agent | 运行用户 | Server 校验接口，Worker 启动所选智能体 |
+| backend | 运行用户 | Server 校验资源与兼容性；Worker 选择执行后端，按 resources 限制资源 |
+| model | 运行用户或训练框架 | Worker 模型入口使用端点、模型及 generation 参数；训练端点可指向 Bridge ModelGateway |
+| tools | 运行用户，显式给出完整列表 | Server 解析接口；Worker 只开放列表中的工具；[] 表示无工具 |
+| limits | 运行用户 | Server 固定总截止时间，Worker 限制模型调用、工具调用、环境动作和累计输出 |
+| retry | 运行用户，允许省略 | Server 决定基础设施失败是否重试及退避；不用于模型网络请求重试 |
+| training | 训练框架或运行用户，仅训练时提供 | Bridge/模型入口约束版本和训练轨迹；评测时不得填写 |
+| runtime.image | 需要覆盖镜像时由运行用户填写 | Server 选择并锁定镜像；Worker 使用最终值；Process 不接受显式镜像覆盖 |
+| trajectory_retention_days | 运行用户，允许省略 | 目标 Server/ArtifactStore 控制轨迹保存期；真实保留期服务仍待实现 |
+
+题目、答案、仓库信息和隐藏测试属于任务数据，不写进 run.yaml。Docker 引擎连接地址、宿主路径和隔离规则属于 Worker 部署配置，也不让普通运行用户填写。完整嵌套字段、类型及声明默认值查[生成字段字典](../generated/field_dictionary.md)，不在这里复制第二份字段清单。
+
+### 2.3 哪些参数可以省略
+
+有声明默认值的参数允许省略。当前精简示例省略了默认资源、模型生成参数、重试退避、轨迹保留天数和默认组件参数。Environment、Agent、Scorer、Backend 的实现选择，模型端点和身份，以及 limits 中的预算仍须明确给出；不按数据集名称自动选择它们。
+
+组件 config 省略时按空对象处理，再补该组件参数模型声明的默认值。若组件还有无默认值的必填参数，仍然报错。例如 Process 的 config.runtime_profile 必填，Docker/Podman 没有对应参数。
+
+默认值只在统一契约或组件模型中定义一次。Bridge 只补缺失字段；显式填写的 0、false、空列表不会被默认值替换，类型错误和非法 null 直接报错。补齐后形成完整 RunSpec，Server 校验与 Worker 执行不再补值。--dry-run 应显示补齐后的配置，用户可以确认实际提交内容。默认值规则随对应协议或组件版本维护，不从 Worker 本机配置临时取值。
+
+参考中的默认值用于演示，不代表真实部署的资源和采样推荐。model.source=simulated 明确标记模拟模型；接真实模型时需填写真实端点并声明 real，不能把示例当成真实模型评测证据。
+
+### 2.4 组件特有参数和同义字段
+
+只有组件独有且用户需要调整的行为才能放在 config 中，并受所选组件的 schema 校验。当前九个数据集的 environment.config 和 scorer.config 均无额外参数；新数据集若确有业务参数，在 models.py 中定义并登记相应角色配置。
+
+总超时只用 limits.total_timeout_ms，模型调用上限只用 limits.max_generations，采样温度只用 model.generation.temperature。组件 config 不能再定义另一个同义入口，schema 不接受任意扩展字典。未知字段和已登记别名可自动拒绝；任意自定义字段的语义仍需作者和审查者判断。
+
+不同作用范围的限制分别保留：工具 timeout_ms 限制一次工具调用，limits.total_timeout_ms 限制整个 episode；model.generation.max_output_tokens 限制一次生成，limits.max_total_output_tokens 限制累计输出。前者都不能放大后者。
+
+PlainAgent 的 history_policy 用于选择实际历史策略；OpenHands 的固定 SDK 历史处理不要求用户填写。OpenHands 不公开 sdk_iteration_limit，模型调用预算统一在 limits；真实接入时须验证 SDK 内部迭代与模型调用的关系，不能直接把两个计数当成同一个数。
+
+### 2.5 更换 Agent、Backend 和镜像
+
+更换组件只改相应 implementation 及该组件确实需要的 config，题目和评分材料保持不变；不通过修改 Adapter 来选择 Agent。工具列表仍由用户明确填写，新 Agent 必需的工具缺失时应报错。
+
+Process 的 runtime_profile 仅表示管理员准备好的本机运行环境；Docker/Podman 不接受该字段，其引擎连接由 Worker 部署时确定。容器镜像仍只使用 runtime.image，来源与优先级统一见[主方案第 7.3 节](../uenv_design.md#73-镜像来源与唯一解析规则)。
+
+参数独立选择不保证任意组合可用。系统按所选组件的类型、工具接口、运行依赖和资源能力判断兼容性；不按数据集名称选择默认后端，也不在组合失败时偷偷切换。
 
 ## 3. 提交、查看和取消
 

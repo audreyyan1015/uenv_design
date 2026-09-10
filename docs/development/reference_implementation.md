@@ -116,6 +116,7 @@ sequenceDiagram
 |---|---|---|
 | 包 id、version | Python package_loader 生成 schema 地址，Rust ComponentCatalog 查找固定组件 | 已有本地消费路径；不代表 Hub 发布服务已完成 |
 | environment、agent | PlanResolver 锁定后，由 EnvironmentHost.prepare、AgentHost.prepare 使用相应 plan 字段 | 参考使用端口和 mock；真实进程待接入 |
+| 公开配置与默认值 | package_loader.expand_run 调用 SchemaRegistry.apply_defaults 后严格校验 RunSpec | 已有本地双入口等价和非法值测试；正式 Bridge/CLI 仍待实现 |
 | backend、runtime、internet_access | PlanResolver 解析组合和镜像；Backend.open 接收锁定后的计划信息 | 真正的 Process/Docker/Podman 驱动与隔离待实现 |
 | model、training | AgentRuntime.generate 交给 ModelProvider，并检查生成记录 | 模型服务为 mock；生产 Bridge、推理端点与训练框架待接入 |
 | tools | PlanResolver 匹配接口；ToolHost.prepare 和 AgentHost.prepare 分别核验同一计划工具表；AgentRuntime.call_tool 使用它 | 已验证端口约束；Python 函数包装、MCP 和 OpenHands 待接入 |
@@ -155,11 +156,11 @@ Backend.open、各 Host.prepare、AgentHost.run_agent、ToolHost/Backend.freeze�
 
 尚未实现真实网络 RPC、完整 Rust JSON Schema validator、lease/replay、持久 attempt 账本、持久轨迹 spool、durable outbox、启动恢复、进程强制中断、Docker/Podman/Process 驱动、真实 OpenHands/MCP 接入、官方 benchmark 差分和分布式恢复。参考代码通过 trait 和内存 mock 明确了部分端口，但 mock 通过不能当作生产验收。
 
-公开运行示例不填写 schema_version，expand_run 在提交边界生成内部标记。该夹具辅助函数当前一次接收一份包 manifest，Environment/Scorer 选择不匹配时明确拒绝；生产提交端须分别按两个已选角色查询目录，Rust PlanResolver 已分别解析角色，不受夹具限制。
+公开运行示例不填写 schema_version。expand_run 共用于 YAML 解析后的对象和 SDK 提供的公开字典，使用 SchemaRegistry.apply_defaults 补齐声明默认值，再递归校验组件参数和完整 RunSpec；普通 validate 不补值。默认资源、模型生成、重试及组件参数已从九份模板移除，由契约注解补齐，用户显式参数保持原值。该函数在提交边界生成内部协议标记。该夹具辅助函数当前一次接收一份包 manifest，Environment/Scorer 选择不匹配时明确拒绝；生产提交端须分别按两个已选角色查询目录，Rust PlanResolver 已分别解析角色，不受夹具限制。
 
 ## 8. 实现状态与待决事项
 
-主设计定义目标行为；本节集中说明实际参考范围。源码基线见能力清单，具体测试结果仅由 verification.md 维护。下表的“待决策”意味着还缺接口或方案，“待验证”意味着已有目标但还不能据此宣称可用。
+主设计定义目标行为；本节集中说明实际参考范围。源码基线见 source_refactoring_plan.md，具体测试结果仅由 verification.md 维护。下表的“待决策”意味着还缺接口或方案，“待验证”意味着已有目标但还不能据此宣称可用。
 
 | 主题 | 已有参考 | 待完成或待决策 | 验证方式 |
 |---|---|---|---|

@@ -1,6 +1,6 @@
 # UEnv vNext 字段字典
 
-本文件由本地过渡生成器 scripts/build_contracts.py 生成。目标生产版本改由 contracts/proto/uenv/v1/*.proto 生成；本文件不是另一处可编辑协议，禁止手工编辑；修改生成器后重新生成。所有对象默认拒绝未知字段；必填字段没有隐式默认值。run.yaml 展开后的完整 RunSpec 是唯一用户配置输入。
+本文件由本地过渡生成器 scripts/build_contracts.py 生成。目标生产版本改由 contracts/proto/uenv/v1/*.proto 生成；本文件不是另一处可编辑协议，禁止手工编辑；修改生成器后重新生成。所有对象默认拒绝未知字段；表中的必填性针对完整传输对象；标注的默认值只由 Bridge 提交入口补齐，Server/Worker 校验不补值。run.yaml 展开后的完整 RunSpec 是唯一用户配置输入。
 
 嵌套字段的必填是指其父对象已提供时；可选父对象省略时无需补子字段。
 
@@ -164,10 +164,10 @@ TypedConfig 的 data 不是任意 JSON：必须递归满足 schema_ref 指向的
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
-| `cpu_cores` | number | 是 | CPU 核数 |
-| `memory_bytes` | integer | 是 | 内存字节数；最小值：1 |
-| `process_limit` | integer | 是 | 最大进程数；最小值：1 |
-| `disk_bytes` | integer | 是 | 工作区字节预算；最小值：1 |
+| `cpu_cores` | number | 是 | CPU 核数；提交默认值：1 |
+| `memory_bytes` | integer | 是 | 内存字节数；最小值：1；提交默认值：1073741824 |
+| `process_limit` | integer | 是 | 最大进程数；最小值：1；提交默认值：64 |
+| `disk_bytes` | integer | 是 | 工作区字节预算；最小值：1；提交默认值：1073741824 |
 
 ## BackendSpec
 
@@ -177,7 +177,7 @@ TypedConfig 的 data 不是任意 JSON：必须递归满足 schema_ref 指向的
 |---|---|---|---|
 | `implementation` | ComponentRef | 是 |  |
 | `config` | TypedConfig | 是 |  |
-| `resources` | Resources | 是 |  |
+| `resources` | Resources | 是 | ；提交默认值：{} |
 
 ## GenerationConfig
 
@@ -185,10 +185,10 @@ TypedConfig 的 data 不是任意 JSON：必须递归满足 schema_ref 指向的
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
-| `temperature` | number | 是 | 采样温度；最小值：0 |
-| `top_p` | number | 是 | 核采样概率 |
-| `max_output_tokens` | integer | 是 | 单次生成最大 token 数；最小值：1 |
-| `stop` | array<string> | 是 | 停止字符串列表 |
+| `temperature` | number | 是 | 采样温度；最小值：0；提交默认值：0 |
+| `top_p` | number | 是 | 核采样概率；提交默认值：1 |
+| `max_output_tokens` | integer | 是 | 单次生成最大 token 数；最小值：1；提交默认值：1024 |
+| `stop` | array<string> | 是 | 停止字符串列表；提交默认值：[] |
 
 ## ModelSpec
 
@@ -197,15 +197,15 @@ TypedConfig 的 data 不是任意 JSON：必须递归满足 schema_ref 指向的
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
 | `endpoint` | string | 是 | 端点地址，不包含密钥 |
-| `credential_ref` | string | 是 | 凭据引用；允许空表示不需要凭据 |
+| `credential_ref` | string | 是 | 凭据引用；允许空表示不需要凭据；提交默认值："" |
 | `model_id` | string | 是 | 模型身份 |
-| `generation` | GenerationConfig | 是 |  |
+| `generation` | GenerationConfig | 是 | ；提交默认值：{} |
 | `source` | string | 是 | 模型来源，模拟必须显式声明；枚举：real, simulated |
-| `max_transport_retries` | integer | 是 | 仅尚未产生可用生成结果时的网络重试上限；最小值：0 |
+| `max_transport_retries` | integer | 是 | 仅尚未产生可用生成结果时的网络重试上限；最小值：0；提交默认值：0 |
 
 ## Limits
 
-预算命名不可混用；所有值在 RunSpec 中显式提交
+预算命名不可混用；完整 RunSpec 必须包含所有预算值
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
@@ -234,9 +234,9 @@ episode 失败重试仅 Server 决定
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
-| `max_attempts` | integer | 是 | 含首次在内的最大 attempt 数；最小值：1 |
-| `initial_backoff_ms` | integer | 是 | 初始退避毫秒；最小值：1 |
-| `max_backoff_ms` | integer | 是 | 退避上限毫秒；最小值：1 |
+| `max_attempts` | integer | 是 | 含首次在内的最大 attempt 数；最小值：1；提交默认值：1 |
+| `initial_backoff_ms` | integer | 是 | 初始退避毫秒；最小值：1；提交默认值：500 |
+| `max_backoff_ms` | integer | 是 | 退避上限毫秒；最小值：1；提交默认值：5000 |
 
 ## RunSpec
 
@@ -254,8 +254,8 @@ episode 失败重试仅 Server 决定
 | `backend` | BackendSpec | 是 |  |
 | `model` | ModelSpec | 是 |  |
 | `limits` | Limits | 是 |  |
-| `retry` | RetryPolicy | 是 |  |
-| `trajectory_retention_days` | integer | 是 | Server 保存权威轨迹的天数；只影响保留期，不改变记录内容；最小值：1 |
+| `retry` | RetryPolicy | 是 | ；提交默认值：{} |
+| `trajectory_retention_days` | integer | 是 | Server 保存权威轨迹的天数；只影响保留期，不改变记录内容；最小值：1；提交默认值：7 |
 | `training` | TrainingSpec | 否 | 仅 purpose=training 时必填；purpose=evaluation 时禁止出现 |
 | `runtime` | RuntimeSpec | 否 | 用户显式镜像选择，优先于 task 和 package |
 
@@ -328,7 +328,7 @@ Server 颁发，Worker 核验；不能由用户任务参数携带
 | `backend` | object | 是 | 由用户明确选择的任务后端；不读取数据集名称做选择 |
 | `backend.implementation` | ResolvedComponent | 是 |  |
 | `backend.config` | TypedConfig | 是 |  |
-| `backend.resources` | Resources | 是 |  |
+| `backend.resources` | Resources | 是 | ；提交默认值：{} |
 | `scorer` | object | 是 | 选择一个实现及其 schema 验证后的参数 |
 | `scorer.implementation` | ResolvedComponent | 是 |  |
 | `scorer.config` | TypedConfig | 是 |  |
@@ -769,8 +769,8 @@ harness 结果，候选失败和 harness 错误不同
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
-| `history_policy` | string | 是 | 模型上下文策略；枚举：full, last_generation |
-| `system_prompt` | string | 是 | 智能体系统提示词；空表示不额外添加 |
+| `history_policy` | string | 是 | 模型上下文策略；枚举：full, last_generation；提交默认值："full" |
+| `system_prompt` | string | 是 | 智能体系统提示词；空表示不额外添加；提交默认值："" |
 
 ## OpenHandsAgentConfig
 
@@ -778,9 +778,7 @@ OpenHands adapter 的明确可调参数
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
-| `history_policy` | string | 是 | 由 SDK 管理上下文；枚举：sdk |
-| `system_prompt` | string | 是 | 用户附加的系统提示 |
-| `sdk_iteration_limit` | integer | 是 | SDK 自身迭代上限；不能替代 max_generations；最小值：1 |
+| `system_prompt` | string | 是 | 用户附加的系统提示；提交默认值："" |
 
 ## ProcessBackendConfig
 
@@ -792,11 +790,10 @@ OpenHands adapter 的明确可调参数
 
 ## ContainerBackendConfig
 
-Docker/Podman 后端配置；引擎种类独立于镜像
+Docker/Podman 无额外用户参数；引擎连接属于 Worker 部署配置，镜像选择位于 runtime.image
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
-| `runtime_profile` | string | 是 | 管理员预注册的引擎连接配置名；不得携带网络、挂载或身份权限 |
 
 ## ToolConfig
 
@@ -804,8 +801,8 @@ Docker/Podman 后端配置；引擎种类独立于镜像
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
-| `timeout_ms` | integer | 是 | 工具执行预算，受 episode 总 deadline 限制；最小值：1 |
-| `max_preview_bytes` | integer | 是 | 返回消息预览长度；原始输出另存 artifact；最小值：1 |
+| `timeout_ms` | integer | 是 | 工具执行预算，受 episode 总 deadline 限制；最小值：1；提交默认值：30000 |
+| `max_preview_bytes` | integer | 是 | 返回消息预览长度；原始输出另存 artifact；最小值：1；提交默认值：8192 |
 
 ## TerminalArgs
 

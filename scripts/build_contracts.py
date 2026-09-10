@@ -76,13 +76,10 @@ obj("PlainAgentConfig", "轻量智能体配置", {
     "history_policy": enum("模型上下文策略", "full", "last_generation"),
     "system_prompt": string("智能体系统提示词；空表示不额外添加")})
 obj("OpenHandsAgentConfig", "OpenHands adapter 的明确可调参数", {
-    "history_policy": enum("由 SDK 管理上下文", "sdk"),
-    "system_prompt": string("用户附加的系统提示"),
-    "sdk_iteration_limit": integer("SDK 自身迭代上限；不能替代 max_generations", 1)})
+    "system_prompt": string("用户附加的系统提示")})
 obj("ProcessBackendConfig", "进程任务后端；无容器镜像", {
     "runtime_profile": string("管理员预注册的本机依赖配置名；不得改变平台安全底线或计划中的 internet_access")})
-obj("ContainerBackendConfig", "Docker/Podman 后端配置；引擎种类独立于镜像", {
-    "runtime_profile": string("管理员预注册的引擎连接配置名；不得携带网络、挂载或身份权限")})
+obj("ContainerBackendConfig", "Docker/Podman 无额外用户参数；引擎连接属于 Worker 部署配置，镜像选择位于 runtime.image", {})
 obj("ToolConfig", "公共命令/文件工具参数", {
     "timeout_ms": integer("工具执行预算，受 episode 总 deadline 限制", 1),
     "max_preview_bytes": integer("返回消息预览长度；原始输出另存 artifact", 1)})
@@ -145,7 +142,7 @@ obj("ModelSpec", "统一模型端点；训练时可指向 Bridge ModelGateway", 
     "model_id": string("模型身份"), "generation": ref("GenerationConfig"),
     "source": enum("模型来源，模拟必须显式声明", "real", "simulated"),
     "max_transport_retries": integer("仅尚未产生可用生成结果时的网络重试上限")})
-obj("Limits", "预算命名不可混用；所有值在 RunSpec 中显式提交", {
+obj("Limits", "预算命名不可混用；完整 RunSpec 必须包含所有预算值", {
     "total_timeout_ms": integer("从 Server 接收起的总预算，包含排队及评分", 1),
     "score_reserve_ms": integer("为结果收集、冻结及最终评分预留预算；三者共享总截止时间"),
     "max_generations": integer("成功或部分完成的模型生成调用预算", 1),
@@ -176,6 +173,24 @@ D["RunSpec"]["allOf"] = [{
     "then": {"required": ["training"]},
     "else": {"not": {"required": ["training"]}},
 }]
+# Submission defaults only. Validation and Worker execution never fill missing values.
+# Required wire fields stay required after the Bridge has expanded public input.
+for type_name, defaults in {
+    "PlainAgentConfig": {"history_policy": "full", "system_prompt": ""},
+    "OpenHandsAgentConfig": {"system_prompt": ""},
+    "ToolConfig": {"timeout_ms": 30000, "max_preview_bytes": 8192},
+    "Resources": {"cpu_cores": 1, "memory_bytes": 1073741824,
+                  "process_limit": 64, "disk_bytes": 1073741824},
+    "BackendSpec": {"resources": {}},
+    "GenerationConfig": {"temperature": 0, "top_p": 1,
+                         "max_output_tokens": 1024, "stop": []},
+    "ModelSpec": {"credential_ref": "", "max_transport_retries": 0, "generation": {}},
+    "RetryPolicy": {"max_attempts": 1, "initial_backoff_ms": 500, "max_backoff_ms": 5000},
+    "RunSpec": {"retry": {}, "trajectory_retention_days": 7},
+}.items():
+    for field_name, default in defaults.items():
+        D[type_name]["properties"][field_name]["default"] = default
+
 obj("EpisodeRequest", "Bridge -> Server；不接受客户端指定 attempt 或 lease", {
     "request_id": ID, "run_id": ID, "episode_id": ID, "task": ref("TaskSpec"),
     "private_data": ref("TypedConfig", "可选评分依据，随受控请求配对提交；大型测试使用内部 ArtifactRef；不得交给 Agent/Environment 或公开轨迹"),
@@ -425,7 +440,7 @@ def main():
         (extensions/(name+'.schema.json')).write_text(json.dumps(document,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     schema={"$schema":"https://json-schema.org/draft/2020-12/schema", "$id":"urn:uenv:vnext:contracts", "$defs":external_refs(core)}
     (target/'uenv.schema.json').write_text(json.dumps(schema,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
-    lines=['# UEnv vNext 字段字典','', '本文件由本地过渡生成器 scripts/build_contracts.py 生成。目标生产版本改由 contracts/proto/uenv/v1/*.proto 生成；本文件不是另一处可编辑协议，禁止手工编辑；修改生成器后重新生成。所有对象默认拒绝未知字段；必填字段没有隐式默认值。run.yaml 展开后的完整 RunSpec 是唯一用户配置输入。', '',
+    lines=['# UEnv vNext 字段字典','', '本文件由本地过渡生成器 scripts/build_contracts.py 生成。目标生产版本改由 contracts/proto/uenv/v1/*.proto 生成；本文件不是另一处可编辑协议，禁止手工编辑；修改生成器后重新生成。所有对象默认拒绝未知字段；表中的必填性针对完整传输对象；标注的默认值只由 Bridge 提交入口补齐，Server/Worker 校验不补值。run.yaml 展开后的完整 RunSpec 是唯一用户配置输入。', '',
            '嵌套字段的必填是指其父对象已提供时；可选父对象省略时无需补子字段。', '',
            'JSON 数字不得为 NaN/Infinity；时间统一毫秒。未提供的可选字段省略，不用空字符串代替 null；有明确允许空字符串的字段以定义为准。', '',
            'TypedConfig 的 data 不是任意 JSON：必须递归满足 schema_ref 指向的版本化 schema。表中 $ref 继续展开到同名结构。新扩展只在包内 models.py 定义，由发布工具生成并注册 schema，不在主流程增加名称分支。', '']
@@ -446,6 +461,7 @@ def main():
             if 'enum' in v: detail+='；枚举：'+', '.join(map(str,v['enum']))
             if 'const' in v: detail+='；固定值：'+str(v['const'])
             if 'minimum' in v: detail+='；最小值：'+str(v['minimum'])
+            if 'default' in v: detail+='；提交默认值：'+json.dumps(v['default'],ensure_ascii=False)
             lines.append(f"| `{k}` | {typ} | {'是' if required else '否'} | {detail.replace('|','/')} |")
         lines.append('')
     (ROOT/'docs/generated').mkdir(parents=True, exist_ok=True)

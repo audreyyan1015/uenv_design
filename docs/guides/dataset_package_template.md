@@ -4,6 +4,8 @@ UEnv 不按问答、代码、SWE 或交互方式给数据集划分系统类型�
 
 本文件替代此前以“省略 Python 类”为目标的最小模板。明确约定：**每个数据集必须有自己命名的 Adapter、Environment、Scorer 类，统一继承系统提供的对应基类。**
 
+运行配置不属于数据集包；run.yaml 的统一模板、Bridge/SDK 处理方式和默认值说明见[用户指南第 2 节](user_guide.md#2-填写运行配置)。
+
 ## 1. 固定的三个入口
 
 | 数据集 | dataset_adapter.py | environment.py | scorer.py |

@@ -500,7 +500,7 @@ Worker 当前也不只是资源启动器。EpisodeExecutor（生产源码 `uenv-
 | 旧参考 `RunSpec.backend.config.data.image` | 本地已移除并拒绝；统一为 RunSpec.runtime.image |
 | SWE payload.command_mode | 删除；系统权限成为 Backend 内部策略，只有真实公共互联网需求写入 PackageManifest.internet_access |
 | backend.config 的 network_policy/workspace_root_profile | 删除；用户不能从 RunSpec 覆盖 Environment 的 internet_access 或平台安全底线 |
-| backend.config 的 runtime_profile | 只保留管理员预注册的本机依赖或引擎连接身份；不得携带访问规则或覆盖 internet_access |
+| backend.config 的 runtime_profile | 仅 Process 保留，表示管理员准备的本机运行环境；Docker/Podman 删除此字段，引擎连接迁入 Worker 部署配置；不得覆盖 internet_access |
 | 把镜像描述为 runtime_assets 中的任意 ArtifactRef | 镜像使用明确 runtime.image 字段；仓库归档、依赖锁等文件才使用 ArtifactRef |
 | 每条任务的最终镜像 | 本地 ExecutionPlan.runtime.image/image_source 已加入并校验；真实镜像解析器待接入 |
 

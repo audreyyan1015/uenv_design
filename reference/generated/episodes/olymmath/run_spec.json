@@ -55,15 +55,15 @@
   },
   "model": {
     "endpoint": "http://localhost:9000/v1",
-    "credential_ref": "",
     "model_id": "example",
+    "source": "simulated",
+    "credential_ref": "",
     "generation": {
       "temperature": 0,
       "top_p": 1,
       "max_output_tokens": 1024,
       "stop": []
     },
-    "source": "simulated",
     "max_transport_retries": 0
   },
   "limits": {

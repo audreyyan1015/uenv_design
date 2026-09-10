@@ -32,7 +32,7 @@
 |---|---|---|
 | `domain/sample.py` | FrameworkSample / SampleIdentity | 保存框架样本与 episode 的身份关系，不存业务题目别名 |
 | `domain/ports.py` | EpisodeClient / ModelProvider | 声明对 Server 与框架推理服务的窄接口 |
-| `application/bridge_service.py` | BridgeService | 提交与收集统一批次 |
+| `application/bridge_service.py` | BridgeService | 创建 run 时共用契约驱动的配置补值和校验函数；提交与收集统一批次 |
 | `application/sample_preparation.py` | prepare_samples | 互斥解析自带数据与 Hub 样本；原始行经 DatasetAdapter 转换，标准化行直接校验，统一输出 task/private_data |
 | `application/request_builder.py` | build_episode_request / build_batch_request | 从公开 TaskSpec/RunSpec 构建请求和稳定 ID；公开 task 与私有 private_data 配对进入 EpisodeRequest，评分数据不进入 TaskSpec |
 | `application/result_collector.py` | ResultCollector | 按身份收集、取消和恢复订阅，不重算评分 |
@@ -44,7 +44,7 @@
 | `infrastructure/model_gateway.py` | ModelGateway | 转发模型请求与真实 token/version，不读私有评分材料 |
 | `infrastructure/adapter_host.py` | DatasetAdapterHost | 受管理加载用户 DatasetAdapter，隔离其依赖 |
 | `interfaces/client.py` | UEnvClient | 稳定 Python 用户入口 |
-| `interfaces/cli.py` | main | 读取任务文件和完整 run 配置并展开 RunSpec；不提供同字段 CLI 覆盖 |
+| `interfaces/cli.py` | main | 读取文件路径并调用 Bridge 共用配置函数；与 SDK 输入共用默认值、校验和提交，不提供同字段覆盖 |
 | `interfaces/verl_adapter.py` | VerlAdapter | VeRL 的输入输出形态和版本兼容 |
 | `interfaces/roll_adapter.py` | RollAdapter | ROLL 适配；实验性能力保持实验标签，未实现不宣称支持 |
 | `bootstrap.py` | build_bridge | 组装依赖，不含任务业务 |

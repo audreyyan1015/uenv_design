@@ -98,6 +98,14 @@ PackageManifest.provided_tools 只登记包能够提供的 ToolSpec；RunSpec.to
 
 启动时有两个只读核验结果：ToolHost 返回 session 中真正可路由的工具，AgentHost 返回模型经过 MCP 或原生适配后真正可见的工具。两者都必须与同一份 `ExecutionPlan.tools` 完全一致；它们不是名为 `actual_tools` 的第二份配置，也不能相互覆盖。
 
+### 1.1 用户输入与完整 RunSpec
+
+YAML 文件与 SDK 输入共用 Bridge 配置规范化函数。系统字段默认值只定义在核心契约，组件参数默认值只定义在对应模型并生成 schema；本地过渡来源仍是 scripts/build_contracts.py 与包 models.py。不得再建立一份数据集默认运行配置表或让 Worker 补值。文件填写步骤见[用户指南第 2 节](../guides/user_guide.md#2-填写运行配置)。
+
+提交入口仅为缺失字段应用声明默认值，不覆盖显式值，不把 null 当成省略；未声明默认值的必填字段缺失时报错。可省略的 config 先作为空对象处理，再按组件模型补值并校验。提交后的 RunSpec 和 ExecutionPlan 保持完整必填约束；schema 的 default 是提交注解，不代表 Server/Worker validator 自动修改输入。当前参考只应用明确对象属性和数组元素的默认值，不猜测条件或联合分支的默认值。
+
+config 只能描述组件独有行为，不能重复 model、limits 等公共执行参数。ProcessBackendConfig.runtime_profile 仅为本机运行环境选择；ContainerBackendConfig 不包含该字段，引擎连接属于 Worker 部署配置。OpenHands 配置不再包含固定 history_policy 或 sdk_iteration_limit；统一模型调用上限只使用 limits.max_generations。SDK 内部迭代处理属于框架接入，不得形成另一份用户轮数配置。
+
 ## 2. 业务与结果
 
 Hub 数据格式目标见主方案第 9 章：标准化 JSONL 行复用 task: TaskSpec 与可选 private_data: TypedConfig，身份仍在 task.dataset/sample_id；不另加 data_id 或重复顶层 dataset 字段。数据 revision 与代码包 version 分开，一次样本输入只选择本地内容或 Hub 固定版本之一，在 prepare/Bridge 准备阶段解析后使用同一 EpisodeRequest。运行配置不写入数据行。行格式和 Hub 数据 API 校验尚待迁移，当前状态集中见[Hub 迁移说明](source_refactoring_plan.md#114-hub-与数据输入迁移)。

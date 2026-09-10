@@ -10,11 +10,13 @@
       "enum": [
         "full",
         "last_generation"
-      ]
+      ],
+      "default": "full"
     },
     "system_prompt": {
       "type": "string",
-      "description": "智能体系统提示词；空表示不额外添加"
+      "description": "智能体系统提示词；空表示不额外添加",
+      "default": ""
     }
   },
   "required": [

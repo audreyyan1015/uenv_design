@@ -63,15 +63,15 @@
   "purpose": "evaluation",
   "model": {
     "endpoint": "http://localhost:9000/v1",
-    "credential_ref": "",
     "model_id": "example",
+    "source": "simulated",
+    "credential_ref": "",
     "generation": {
       "temperature": 0,
       "top_p": 1,
       "max_output_tokens": 1024,
       "stop": []
     },
-    "source": "simulated",
     "max_transport_retries": 0
   },
   "limits": {
@@ -102,9 +102,7 @@
     "config": {
       "schema_ref": "uenv://schemas/vnext/OpenHandsAgentConfig",
       "data": {
-        "history_policy": "sdk",
-        "system_prompt": "",
-        "sdk_iteration_limit": 30
+        "system_prompt": ""
       }
     }
   },
@@ -125,17 +123,15 @@
       "version": "1.0.0",
       "digest": "sha256:8d79b535263ce829f7e80c368bbdeab724e9e6439229706521ff89fec106da9c"
     },
-    "config": {
-      "schema_ref": "uenv://schemas/vnext/ContainerBackendConfig",
-      "data": {
-        "runtime_profile": "example-only"
-      }
-    },
     "resources": {
       "cpu_cores": 1,
       "memory_bytes": 1073741824,
       "process_limit": 64,
       "disk_bytes": 1073741824
+    },
+    "config": {
+      "schema_ref": "uenv://schemas/vnext/ContainerBackendConfig",
+      "data": {}
     }
   },
   "tools": [
@@ -243,5 +239,5 @@
   ],
   "internet_access": false,
   "deadline_at_ms": 1800000300000,
-  "plan_digest": "sha256:66439950a25f75c546bf1e6f40f9aefa81213ec261d636ffef2f501524243e4e"
+  "plan_digest": "sha256:2d1b4c2d3ddbf72ed891e5a24ccdd22c9a717eff9c58af471d2dcf91b2f47272"
 }

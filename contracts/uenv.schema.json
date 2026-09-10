@@ -477,22 +477,26 @@
         "cpu_cores": {
           "type": "number",
           "description": "CPU 核数",
-          "exclusiveMinimum": 0
+          "exclusiveMinimum": 0,
+          "default": 1
         },
         "memory_bytes": {
           "type": "integer",
           "minimum": 1,
-          "description": "内存字节数"
+          "description": "内存字节数",
+          "default": 1073741824
         },
         "process_limit": {
           "type": "integer",
           "minimum": 1,
-          "description": "最大进程数"
+          "description": "最大进程数",
+          "default": 64
         },
         "disk_bytes": {
           "type": "integer",
           "minimum": 1,
-          "description": "工作区字节预算"
+          "description": "工作区字节预算",
+          "default": 1073741824
         }
       },
       "required": [
@@ -514,7 +518,8 @@
           "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig"
         },
         "resources": {
-          "$ref": "urn:uenv:vnext:contracts#/$defs/Resources"
+          "$ref": "urn:uenv:vnext:contracts#/$defs/Resources",
+          "default": {}
         }
       },
       "required": [
@@ -531,18 +536,21 @@
         "temperature": {
           "type": "number",
           "description": "采样温度",
-          "minimum": 0
+          "minimum": 0,
+          "default": 0
         },
         "top_p": {
           "type": "number",
           "description": "核采样概率",
           "exclusiveMinimum": 0,
-          "maximum": 1
+          "maximum": 1,
+          "default": 1
         },
         "max_output_tokens": {
           "type": "integer",
           "minimum": 1,
-          "description": "单次生成最大 token 数"
+          "description": "单次生成最大 token 数",
+          "default": 1024
         },
         "stop": {
           "type": "array",
@@ -550,7 +558,8 @@
             "type": "string",
             "description": "停止串"
           },
-          "description": "停止字符串列表"
+          "description": "停止字符串列表",
+          "default": []
         }
       },
       "required": [
@@ -571,14 +580,16 @@
         },
         "credential_ref": {
           "type": "string",
-          "description": "凭据引用；允许空表示不需要凭据"
+          "description": "凭据引用；允许空表示不需要凭据",
+          "default": ""
         },
         "model_id": {
           "type": "string",
           "description": "模型身份"
         },
         "generation": {
-          "$ref": "urn:uenv:vnext:contracts#/$defs/GenerationConfig"
+          "$ref": "urn:uenv:vnext:contracts#/$defs/GenerationConfig",
+          "default": {}
         },
         "source": {
           "type": "string",
@@ -591,7 +602,8 @@
         "max_transport_retries": {
           "type": "integer",
           "minimum": 0,
-          "description": "仅尚未产生可用生成结果时的网络重试上限"
+          "description": "仅尚未产生可用生成结果时的网络重试上限",
+          "default": 0
         }
       },
       "required": [
@@ -606,7 +618,7 @@
     },
     "Limits": {
       "type": "object",
-      "description": "预算命名不可混用；所有值在 RunSpec 中显式提交",
+      "description": "预算命名不可混用；完整 RunSpec 必须包含所有预算值",
       "properties": {
         "total_timeout_ms": {
           "type": "integer",
@@ -700,17 +712,20 @@
         "max_attempts": {
           "type": "integer",
           "minimum": 1,
-          "description": "含首次在内的最大 attempt 数"
+          "description": "含首次在内的最大 attempt 数",
+          "default": 1
         },
         "initial_backoff_ms": {
           "type": "integer",
           "minimum": 1,
-          "description": "初始退避毫秒"
+          "description": "初始退避毫秒",
+          "default": 500
         },
         "max_backoff_ms": {
           "type": "integer",
           "minimum": 1,
-          "description": "退避上限毫秒"
+          "description": "退避上限毫秒",
+          "default": 5000
         }
       },
       "required": [
@@ -770,12 +785,14 @@
           "$ref": "urn:uenv:vnext:contracts#/$defs/Limits"
         },
         "retry": {
-          "$ref": "urn:uenv:vnext:contracts#/$defs/RetryPolicy"
+          "$ref": "urn:uenv:vnext:contracts#/$defs/RetryPolicy",
+          "default": {}
         },
         "trajectory_retention_days": {
           "type": "integer",
           "minimum": 1,
-          "description": "Server 保存权威轨迹的天数；只影响保留期，不改变记录内容"
+          "description": "Server 保存权威轨迹的天数；只影响保留期，不改变记录内容",
+          "default": 7
         },
         "training": {
           "$ref": "urn:uenv:vnext:contracts#/$defs/TrainingSpec",
@@ -1064,7 +1081,8 @@
               "$ref": "urn:uenv:vnext:contracts#/$defs/TypedConfig"
             },
             "resources": {
-              "$ref": "urn:uenv:vnext:contracts#/$defs/Resources"
+              "$ref": "urn:uenv:vnext:contracts#/$defs/Resources",
+              "default": {}
             }
           },
           "required": [

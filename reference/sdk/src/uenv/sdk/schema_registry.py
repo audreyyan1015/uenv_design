@@ -50,6 +50,37 @@ class SchemaRegistry:
             for identifier in sorted(self.extensions)]} if self.extensions else False
         return core
 
+    def apply_defaults(self, name, value):
+        """Copy public input and fill declared defaults at submission only.
+
+        Missing objects are created only when explicitly defaulted to {}.
+        Explicit null/false/zero and unknown fields are preserved for validation.
+        This deliberately does not resolve conditional/union defaults.
+        """
+        document = self.core if name in self.core['$defs'] else self.extensions[name]
+        schema = document['$defs'][name] if document is self.core else document
+
+        def expand(schema, value, document):
+            if '$ref' in schema:
+                uri, _, fragment = schema['$ref'].partition('#')
+                target = document if not uri else (
+                    self.core if uri == self.core['$id'] else self.extensions[uri])
+                resolved = target
+                for part in fragment.lstrip('/').split('/') if fragment else []:
+                    resolved = resolved[part.replace('~1', '/').replace('~0', '~')]
+                value = expand(resolved, value, target)
+            if isinstance(value, dict):
+                for key, child in schema.get('properties', {}).items():
+                    if key not in value and 'default' in child:
+                        value[key] = deepcopy(child['default'])
+                    if key in value:
+                        value[key] = expand(child, value[key], document)
+            elif isinstance(value, list) and 'items' in schema:
+                value = [expand(schema['items'], item, document) for item in value]
+            return value
+
+        return expand(schema, deepcopy(value), document)
+
     def validate(self, name, value):
         canonical_bytes(value)
         core = self.bound_schema()
