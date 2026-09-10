@@ -1,5 +1,7 @@
 # UEnv 目标模块与逐文件职责
 
+本文件由 `scripts/build_module_map.py` 自动生成，禁止手工编辑；修改目标模块时编辑生成器后重新生成。
+
 本文件是目标组织清单，不是现有代码目录，也不表示这些类已经实现。每个组件采用相同四层命名；用户扩展包采用统一的小型模板，无需复制服务端四层结构。层数由组件角色决定，不是各目录任意选择风格。
 
 公共根目录：`contracts/proto/uenv/v1/`（系统结构和 RPC 的唯一可编辑来源），`contracts/generated/schema/`、`crates/uenv-contracts/` 和 `python/uenv_contracts/`（全部生成，不手改），`crates/`（Rust 控制服务与资源驱动），`python/`（Python SDK、Bridge 和受管组件 host），`packages/datasets/`、`packages/agents/`、`packages/tools/`（用户同款扩展），`deploy/`、`docs/`、`tests/system/`。

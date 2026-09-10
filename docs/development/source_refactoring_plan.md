@@ -6,7 +6,43 @@
 
 源码基线为远端提交 `af675b20b91c66672b0517b378205603fe424bf3`。2026-09-08 再次只读检查远端 `/home/uenv-release-0905/uenv_pre_release`，分支为 `uenv_pre_release`，工作区干净。与 design 同级的 `source` 是本次分析使用的本地快照。本文描述计划，不表示生产源码已经迁移，也不表示已有测试在本次检查中通过。
 
-目标语义以 `uenv_design.md` 为准，系统协议实施后以 `contracts/proto/uenv/v1/*.proto` 为唯一可编辑来源；`field_dictionary.md` 和机器可校验 schema 都是生成物。目标文件组织以 `module_map.md` 为准；现有能力证据以 `current_capabilities.md` 为准。本文只规定从当前源码迁移到目标架构的顺序、保护措施和删除条件，不再定义另一套类型或字段。
+目标语义以[系统设计方案](../uenv_design.md)为准，系统协议实施后以 `contracts/proto/uenv/v1/*.proto` 为唯一可编辑来源；[字段字典](../generated/field_dictionary.md)和机器可校验 schema 都是生成物。目标文件组织见[模块清单](../generated/module_map.md)。本文统一维护原有能力证据、源码处置、迁移顺序和验收条件，不再定义另一套类型或字段。以下生产源码事实来自上述历史检查，本次文档整理没有重新连接生产服务器。
+
+### 1.1 已集成数据集与源码范围
+
+| 数据集 | 代码支持证据 | 现状判断 | 目标包 |
+|---|---|---|---|
+| GSM8K | math/qa manifest；gsm8k scoring.rs；Bridge 数据准备脚本 | 有题目转换和评分实现 | datasets/gsm8k |
+| PubMedQA | math/qa manifest；标签评分；Bridge benchmark/train scripts | 有训练/评测输入和标签评分 | datasets/pubmedqa |
+| SciTab | math/qa manifest；表格转换和标签评分 | 有表格任务、分类评测实现 | datasets/scitab |
+| OlymMATH | math/qa manifest；数学评分；Bridge EN/ZH、easy/hard 元数据转换 | 变体共享算法，不需四条调度链 | datasets/olymmath |
+| DSCodeBench | code manifest；evaluate_code.py/dscodebench_harness.py | 有代码生成、测试、分数解释；另有 Code Agent 服务路径 | datasets/dscodebench |
+| SWE-bench Verified | BenchmarkVariant、dataset/session、grader、OpenHands adapter | 有完整相关执行模块；本次未跑 benchmark | datasets/swe-verified |
+| SWE-bench Lite | 同家族 enum/parser/grader 分支 | 有变体支持，不能仅此认定独立端到端验收 | datasets/swe-lite |
+| SWE-bench Pro | pro_eval、runtime_contract、OpenHands official runner | 有专用 harness 和运行依赖处理 | datasets/swe-pro |
+| SWE-smith | smith_eval、dataset、训练准备与运行代码 | 有专用训练/评测路径与资源要求 | datasets/swe-smith |
+
+`math`、`qa`、`code`、`swe` 是现有环境/路由标识，不是应新增的四个数据集。OpenEnv/MCP 是接口适配，不列为数据集。ROLL/GEM 目录有实验脚本，尚不据此宣称所有相关环境已集成验收。
+
+证据：math/qa 数据集声明（生产源码 `plugins/math/manifest.yaml:13`）、Code 数据集声明（生产源码 `plugins/code/manifest.yaml:11`）、SWE 四变体（生产源码 `uenv-worker/src/swe/variant.rs:8`）。
+
+### 1.2 源码审查中需要防止的问题
+
+下表汇总此前静态审查发现的风险，用于安排迁移检查，不表示已复现所有故障。具体模块及处置见第 3 节；测试与上线要求见第 7、11 节。
+
+| 原有风险 | 会造成什么问题 | 迁移检查 |
+|---|---|---|
+| 执行完成被当成答对；评分异常被转成零分 | 无法区分答错与评分程序故障 | 分别检查执行状态、任务成功和评分状态 |
+| 用完整回答评分，却只保存截断回答 | 无法根据保存结果解释原分数 | 对照评分输入、最终产物和已保存轨迹 |
+| 多次生成的 token 被拼平，模型版本只取第一次 | 训练数据无法准确对应每次真实生成 | 逐 generation 验证 token、logprob 和版本 |
+| Rust、Python 分别解析同一份评测日志并静默回退 | 相同测试结果可能得到不同分数 | 固定 harness 输出和单一解释入口，做语料差分 |
+| 早退未清理资源；取消丢轨迹而超时保留轨迹 | 资源泄漏，失败记录不完整 | 注入失败和取消，验证统一收尾路径 |
+| 请求超时与默认值取较大值 | 实际执行超过用户要求的期限 | 验证默认值、子调用和重试均不能延长期限 |
+| 指定 Agent 后因缺少任务字段回到旧执行链 | 实际没有执行用户选择的 Agent | 不完整配置明确报错，禁止静默切换链路 |
+| 缺少模型服务时用目标答案作为模型回答 | 测试数据可能被误当成真实模型输出 | 测试替身只能在测试入口注入，产品入口拒绝缺失端点 |
+| reset 配置经额外 sidecar 文件传递 | 协议和文件成为两份配置来源 | 配置进入统一协议，移除隐藏覆盖入口 |
+| instance_id 同时表示样本和运行会话；预热复用键不完整 | 日志关联混乱，或复用不兼容的资源 | 分开任务身份与会话身份，核验完整版本与兼容键 |
+| 题目与评分材料混在同一对象 | 难以检查 Agent 实际可读的数据范围 | 分离公开输入与私有材料并验证进程、文件和接口权限；静态混放本身不证明已经泄漏 |
 
 ## 2. 重构原则
 
@@ -77,144 +113,126 @@ Bridge -> Server -> ExecutionPlan -> Worker EpisodeSupervisor
 
 ### 3.1 Bridge
 
-| 当前实现 | 处置 | 迁移后的职责 |
-|---|---|---|
-| Python VeRL 接入、批次身份映射、结果重排 | 修改 | 拆为请求构建、结果收集和训练视图生成；不读取数据集专用字段 |
-| `model_gateway.py` | 修改后保留 | 继续转发模型请求和真实 token、logprob、模型版本；模型端点来自计划 |
-| Rust AdapterCore 的批次流、背压、并发和协议校验 | 修改并合入 Server | 保留可靠传输行为，删除独立进程这一非必要部署层 |
-| benchmark 数据准备和字段别名 | 移入数据集包或兼容 adapter | Bridge 内部只处理 `TaskSpec`、`RunSpec` 和标准结果 |
-| `native_swe_agent_loop.py` | 移出产品路径 | 如需历史对照，放入 experiments；不能作为另一条正式 SWE 链 |
-| 旧 AgentControl 客户端和池字段 | 迁移期保留，最终删除 | OpenHands 改由 Worker 内的 `AgentRunner` 管理 |
+| 功能 | 当前关键代码 | 处置 | 迁移要求与验收 |
+|---|---|---|---|
+| Python Bridge 框架接入 | verl_agent_loop.py、clients.py | 修改 | 保留有效 VeRL 映射，分出 request/result/model/trace；移除业务别名猜测 |
+| Rust AdapterCore 批次映射 | core/src/core.rs、protocol.rs、service.rs | 修改 | 独立进程可退役，但批次流、背压和协议校验继续使用 Rust；Python Bridge 只做框架转换和调用 |
+| 通用批次提交 | AdapterCore.execute_batch、Server submit_episode_batch | 修改 | ID 对齐、部分失败、重复提交契约不丢失 |
+| 模型 Gateway | bridge/model_gateway.py | 修改 | 保留推理服务接入，规范化真实 token/version，去除数据集语义 |
+| Native SWE 直连训练 baseline | native_swe_agent_loop.py | 修改 | 基线对照脚本保留于 experiments，不作为产品的另一条任务链 |
+| VeRL 版本补丁 | verl_*_patch.py、sitecustomize.py | 修改 | 锁定依赖版本、记录作用范围，能由正式 adapter 代替时移除，禁止无条件全局修改 |
+| 数据集原始输入适配 | Bridge benchmark utils、swe/dataset.rs | 修改 | 题目、表格、repo、patch、测试计划都在扩展包，不在公共 Worker |
 
-必须保留的行为包括批次 ID 对齐、部分失败、重复提交处理、取消、重试边界、输出顺序恢复、真实 token/logprob 和模型版本传递。
+必须保留批次 ID 对齐、部分失败、重复提交处理、取消、重试边界、输出顺序恢复、真实 token/logprob 和模型版本传递。旧 AgentControl 客户端仅为迁移兼容保留，切换完成后删除。
 
 ### 3.2 Server
 
-| 当前实现 | 处置 | 迁移后的职责 |
-|---|---|---|
-| `admission.rs` | 保留 | 有界排队、全局并发、取消和超时 |
-| scheduler 的 Worker 注册、心跳、drain、容量和 reservation | 修改后保留 | 从 `env_type` 匹配改为协议版本、组件、后端和资源能力匹配 |
-| lease、epoch、dispatch token | 保留并统一 | 阻止旧 attempt 或迟到结果覆盖当前权威结果 |
-| SQLite、幂等、outbox、恢复 | 修改后保留 | 使用统一 Episode/Attempt 状态，不再维护 native/agent 两套恢复流程 |
-| `ResultFinalizer` | 保留收口角色，重写字段处理 | 在一个事务中接受唯一终态和结果 outbox，不补造 score 或 token |
-| 观测和轨迹查询 | 修改后保留 | 从标准事件生成可重建投影，不维护第二份权威轨迹 |
-| `execution_backend.rs` | 重写并删除旧实现 | 由 `PlanResolver + PlacementScheduler + EpisodeCoordinator` 取代 |
-| `service/episode.rs` 中的数据集和 Agent 分流 | 重写 | 统一提交、计划解析、调度、结果接纳和取消 |
-| Agent 池、`AgentJob` 队列、池容量和独立 Agent lease | 最终删除 | Server 只调度 Worker；Agent 生命周期属于当前 Worker attempt |
+| 功能 | 当前关键代码 | 处置 | 迁移要求与验收 |
+|---|---|---|---|
+| Server 提交与幂等 | episode_coordinator.rs、service/episode.rs | 修改 | 稳定 ID、冲突拒绝、同一任务挂接原结果；加强事务唯一终态 |
+| Server 执行后端分流 | execution_backend.rs、SweAgentSpec/CodeAgentSpec | 重写 | 统一 ExecutionPlan；删除以数据集判断 native/agent 的代码 |
+| Server admission | admission.rs | 保留 | 队列/全局并发和 Worker 本地并发不同；统一计数收尾，测试取消等待 |
+| Worker 注册、心跳、drain | control_plane.rs、scheduler/traits.rs | 修改 | 删除 supported_env_types 的路由职责，按能力/组件版本匹配 |
+| Worker 选择与 reservation | scheduler/mod.rs | 修改 | 保留容量防超配；输入换能力/资源，release 按 reservation identity 防重复 |
+| lease/epoch/dispatch token | proto 与 dispatch/control plane | 修改 | 旧 attempt 结果不覆盖新结果；不增加未经设计的多主 Server |
+| Server SQLite/outbox/recovery | persistence/* | 修改 | 删除 native/agent 各自恢复流程，统一 attempt 对账 |
+| Server ResultFinalizer | result_finalizer.rs | 修改 | 不补造评分/token，事务收口后再发布 |
+| 观测事件与页面查询 | obs/*、admin_http.rs、trajectory/* | 修改 | 页面以规范事件投影，删除分支手写补偿与同义字段猜测 |
+| 现有 Agent 池选择与入队 | service/episode.rs:703、714、1002、1010；2026-09-05 远端只读核对 | 删除 | Worker 统一管理 Agent 生命周期；退役池身份解析、独立容量和任务队列，不再引入 Agent 池 |
 
-当前 execution_backend.rs（生产源码 `uenv-server/src/execution_backend.rs:51`） 的 `SelectedExecutionBackend` 是 Server 选择不同任务链的分流器，不是目标 `Backend` 驱动。它需要删除；Worker 中真正负责进程和容器资源的 Backend 能力需要保留并统一。
+当前 `SelectedExecutionBackend`（生产源码 `uenv-server/src/execution_backend.rs:51`）是选择任务链的分流器，不是目标 Backend 驱动。以 PlanResolver、PlacementScheduler、EpisodeCoordinator 替代它；Worker 的进程与容器执行能力保留。AgentJob、池容量和独立 Agent lease 在旧流量退出后删除。
 
 ### 3.3 Worker
 
-| 当前实现 | 处置 | 迁移后的职责 |
-|---|---|---|
-| EpisodeExecutor（生产源码 `uenv-worker/src/episode/executor.rs:210`） | 重写 | Rust `EpisodeSupervisor` 成为唯一 attempt 外层状态机 |
-| `execute_swe_episode()` | 删除 | SWE 与其他任务经过同一个 Supervisor，只加载不同组件 |
-| 插件进程创建、健康检查和关闭 | 修改后保留 | `ComponentHostProcess` 和 `ScorerHostProcess`，加强取消和进程组回收 |
-| Backend 与 SandboxProvisioner（生产源码 `uenv-worker/src/backend/mod.rs:17`） | 合并接口 | Process、Docker、Podman 实现同一个完整 Backend trait |
-| SWE CLI container、session、exec/files | 去除 SWE 类型后保留 | 下沉为通用容器引擎和 BackendSession 实现 |
-| SWE image cache | 移出 SWE 后保留 | 按不可变镜像引用和 digest 缓存 |
-| `episode/model_client.rs`、rollout metadata | 修改后保留 | Rust 强制端点、预算和取消；Python Agent 组织消息和循环 |
-| `reward_engine.rs` 和 step reward override | 删除 | 每个进入评分的 attempt 至多调用一次 Python Scorer |
-| Worker WAL | 收敛后保留 | 只作为结果 ACK 前的 durable outbox，不与 Server 争夺权威状态 |
-| 多套 trajectory 类型和 SWE trajectory | 重写模型、保留 I/O | Rust 分配事件序号、分片、校验、封存、上传和 GC |
-| Runtime Gateway | 重写边界 | 保留 exec/read/write 传输，改为受 session 和角色约束的通用 RuntimeRpc |
-| WarmupPool/SweInstancePool | 收敛为可选资源优化 | 只允许 `BackendSessionWarmPool`；不形成 Agent 池，也不影响正确性 |
+| 功能 | 当前关键代码 | 处置 | 迁移要求与验收 |
+|---|---|---|---|
+| Worker 主执行循环 | episode/executor.rs | 重写 | Rust EpisodeSupervisor 保留唯一外层状态机；模型决策循环移入 Python AgentRunner，环境准备、冻结、评分、轨迹和清理由 Rust 强制排序 |
+| Worker 模型请求 | episode/model_client.rs | 修改 | Python Agent/SDK 组织模型消息，Rust Worker 强制端点配置、预算、取消并接收真实生成事件；移除隐式 target 回答 |
+| Worker reward override | episode/reward_engine.rs | 删除 | Rust Supervisor 在每个进入评分的 attempt 中至多调用一次 Python Scorer，补全并校验 ScoreResult；Server 每个 episode 只接纳一个，评测与训练复用 |
+| Python process-plugin 模板 | templates/process-plugin/* | 修改 | 复用简单生命周期思想，reset 配置进入协议，不再依赖 sidecar |
+| 插件进程创建/健康/关闭 | plugin/host.rs、backend/process.rs | 修改 | 改为 Rust ComponentHostProcess/ScorerHostProcess，强化取消、超时和子进程组回收 |
+| 通用 Backend 与 SWE Backend | backend/*、swe/backend/* | 修改 | 抽出 dataset-neutral 的 Process/Docker/Podman 实现 |
+| SWE Docker/Podman CLI 操作 | swe/backend/cli_container.rs | 修改 | 去掉 SWE 类型依赖；错误、预算、exec/files 协议一致 |
+| 镜像下载/缓存 | swe/image_cache.rs | 修改 | 按不可变 digest，保留镜像命名逻辑于数据包准备流程 |
+| WarmupPool/SweInstancePool | pool/*、swe/instance_pool.rs | 修改 | 只保留 `BackendSessionWarmPool`：按完整后端/session 兼容键 borrow/release/invalidated；任务 reset 仍由 Environment 实现，与 Agent 调度无关 |
+| WarmupSizer | pool/warmup_sizer.rs | 修改 | 测量收益后开启，不是正确性的依赖 |
+| Worker WAL | wal/mod.rs | 修改 | 只负责计算结果在 ACK 前可恢复，不与 Server 争权威状态 |
+| 轨迹存储/上传 | swe/trajectory*.rs、uenv-common/trajectory.rs | 修改 | Python 只提交事件内容；Rust 统一身份、序号、原文、逐生成 trace、快照、封存、部分轨迹与 ACK/GC |
+| SWE Runtime Gateway | runtime_gateway/mod.rs | 重写 | 保留远端 exec/read/write 的必要传输；解绑 SweInstancePool，submit 交 Worker 评分服务 |
+| 命令限制与隔离 profile | swe/command_policy.rs、sandbox_profiles/* | 重写 | 用户不配置 syscall/capability；环境包只声明 internet_access，Backend 统一落实平台安全底线 |
 
-Worker 主流程的目标顺序固定为：
-
-```mermaid
-flowchart TD
-    A[validate dispatch] --> B[prepare exact packages and data]
-    B --> C[create BackendSession]
-    C --> D[start role-isolated component hosts]
-    D --> E[Environment.reset]
-    E --> F[AgentRunner.run]
-    F --> G[Environment.finalize]
-    G --> H[freeze scoring input]
-    H --> I[Scorer.score once]
-    I --> J[first cleanup: Scorer - Agent - Tool - Environment - Backend]
-    J --> K[record terminal and seal trajectory]
-    K --> L[persist candidate result in outbox]
-    L --> M[report until ACK]
-```
-
-取消和失败可以从任意阶段进入统一的 cleanup → seal → persist → report 收尾。不得为 SWE、QA 或代码任务再定义另一套收尾顺序。
+`execute_swe_episode()` 在统一 Supervisor 接管并验收后删除。目标执行和收尾顺序只在[主方案第 4.5 节](../uenv_design.md#45-worker执行与资源生命周期)定义；取消和失败也必须进入同一清理路径，不因数据集另设流程。
 
 ### 3.4 Hub
 
-| 当前实现 | 处置 | 迁移后的职责 |
-|---|---|---|
-| 鉴权、RBAC、请求 ID、限流和指标 | 保留 | 继续作为 Hub 服务基础能力 |
-| SQLite repository 和事务 | 修改后保留 | 增加代码包、组件版本、数据 revision 和索引模型 |
-| artifact 流式写入、SHA-256、目标路径校验 | 保留 | 同时服务代码包、数据分片和运行产物 |
-| package/version/bundle digest | 修改后保留 | 代码包与数据 revision 分开建模，均不可原地修改 |
-| schema validator 和 conformance | 修改后保留 | 校验统一 manifest、组件入口和扩展 TypedConfig |
-| 当前 EnvPackage/Stack 等环境中心模型 | 修改或退役 | 对外收敛为代码包、数据 revision、ArtifactRef 和固定版本解析 |
+| 功能 | 当前关键代码 | 处置 | 迁移要求与验收 |
+|---|---|---|---|
+| Hub artifact/version/schema | hub package/repository/domain | 保留 | 版本、digest、发布校验和读取能力继续使用 |
+| Hub env/EnvPackage/Stack | hub types/domain/stack.rs | 修改 | 对用户统一 manifest + RunSpec，内部区分组件和运行组合；旧实体入口转换 |
+| 评分对齐证据 gate | hub domain/rubric.rs | 保留 | 对照 corpus、scorer digest 与报告挂在评分包，不成为数据集路由 |
+| Hub 服务基础能力 | 鉴权、RBAC、请求 ID、限流和指标 | 保留 | 按现有权限边界继续提供服务，不随包领域模型重写 |
+| Hub 仓储与事务 | SQLite repository；package.rs 流式 artifact 写入 | 修改 | 保留事务、SHA-256 和目标路径校验；增加代码包与数据 revision 索引，不重新实现文件仓储 |
 
-现有 package.rs（生产源码 `uenv-hub/uenv-hub-core/src/package.rs:1`） 中的流式 artifact、摘要和路径安全逻辑不应重写。重构重点是领域模型和 API，而不是重新实现文件仓储。
+生产源码 `uenv-hub/uenv-hub-core/src/package.rs:1` 中的流式 artifact、摘要和路径安全逻辑应复用。主要改变领域模型和 API。
 
 ### 3.5 数据集、评分和 OpenHands
 
-| 当前实现 | 处置 | 迁移后的职责 |
-|---|---|---|
-| GSM8K、PubMedQA、SciTab、OlymMATH Rust scorer | Python 重写，Rust 暂作对照 | 每个数据集有明确命名并直接继承 `Scorer` 的 Python 类 |
-| DSCodeBench Python harness | 保留 | 由 `DscodebenchScorer` 通过 Worker 的 harness 能力调用 |
-| SWE dataset/variant/repo specs | 移入各数据集包 | 由专属 Adapter/Environment 管理，不留在公共 Worker |
-| SWE 官方 grader、Pro/Smith evaluator | 保留有效 harness，重写 Python 入口 | 每个数据集 Scorer 选择固定版本的官方规则 |
-| OpenHands SDK、Conversation、原生工具链 | 修改后保留 | `OpenHandsAdapter` 将原生事件和工具接入统一 UEnv 协议 |
-| OpenHands 池化领取、AgentControl 调度和最终评分控制 | 最终删除 | Worker 创建和管理当前 attempt 的 OpenHands runner；评分仍由统一 Scorer 完成 |
+| 功能 | 当前关键代码 | 处置 | 迁移要求与验收 |
+|---|---|---|---|
+| OpenHands SDK 接入 | integrations/openhands/* | 修改 | 保留真实 Conversation/工具执行；去掉任务特判、最终评分控制和全局副作用扩散 |
+| 数学/标签评分 | plugins/math/src/backends/* | 重写 | 使用旧 scorer 和固定语料做差分；新增规则独立版本化 |
+| DSCodeBench Python harness | plugins/code/scripts/* | 保留 | 由新 Python Scorer 使用 Worker 执行能力调用；重新区分候选错误和 harness 故障 |
+| SWE 评分/harness | swe/grader.rs、*_eval.rs、plugins/swe/evaluator | 重写 | 不用多份日志解析器互为静默 fallback；按变体验收 |
 
-语言迁移和评分政策升级必须分开。Python scorer 第一版先复现当前可确认的规则；如果修复旧 bug或对齐新的官方规则，必须使用新的 scorer 版本并单独记录差异。
+语言迁移和评分政策升级必须分开。Python scorer 先复现当前可确认的规则；修复旧 bug 或对齐新的官方规则时，使用新的 scorer 版本并单独记录差异。OpenHands 保留真实 SDK 与工具执行，删除池化领取、AgentControl 调度和最终评分控制。
+
+### 3.6 测试与验收工具
+
+| 功能 | 当前关键代码 | 处置 | 迁移要求与验收 |
+|---|---|---|---|
+| 测试与压测工具 | tests/*、stress_test_refactored | 修改 | 必须测新公共链；已弃用 shortcut 不继续作为端到端验收 |
+
+不得以旧 shortcut 的通过结果证明新公共执行链正确。保留历史源码快照与评分语料作行为对照；删除旧模块的前置条件见第 2.5 节。
+
+### 3.7 协议与控制职责的源码依据
+
+当前系统协议没有单一来源：公共 episode 消息位于 `proto/uenv/v1/*.proto`，Worker RPC 又在 `uenv-worker/proto/worker_service.proto`，Hub RPC 在 `uenv-hub/proto/hub.proto`，Hub HTTP/存储 DTO 还在 `uenv-hub-types/src/lib.rs` 手写。它们表达的是同一系统的边界对象，却由不同目录和不同语言分别维护。目标重构必须把 UEnv 系统 message/service 收敛到 `contracts/proto/uenv/v1/`，再生成 Rust/Python 类型、RPC stub、核心 JSON schema 和字段文档。数据集新增业务字段不进入核心 proto，只在包内 models.py 定义并生成包 schema，从而避免新增数据集触发核心协议升级。
+
+当前 `EpisodeRequest.payload` 是 bytes，注释允许它承载 question、dataset、SWE instance 等多种业务字段；源码没有一个面向作者、可查询的字段目录。Hub 的 `config_schema`、`interface` 和若干开放 JSON Value 又分散在另一组协议/DTO 中。因此当前用户无法可靠地区分系统字段与扩展字段，只能查源码和数据集样例。目标方案增加由统一契约驱动且按作者任务过滤的 `uenv describe`、Python 类型提示与发布前校验：数据集作者只看 PreparedSample/包模型，运行用户只看 RunSpec，内部字段不进入默认视图。这些都属于待实现能力，不能描述成现有命令。
+
+之前审查强调了 `backend/mod.rs` 的薄接口，但不足以覆盖后端现状。补查确认 SweSessionBackend（生产源码 `uenv-worker/src/swe/backend/mod.rs:90`） 已定义 provision/exec/read/write/terminate/reconcile。因此后端目标不是从零重写底层执行能力，而是合并现有两组抽象，复用 CLI container 的底层操作，并清除其中的 SWE 类型耦合。
+
+Bridge 当前也不只是一个 Python 转发器：还存在 Rust AdapterCore（生产源码 `uenv-bridge/core/src/core.rs:31`），其 gRPC 服务还实现批次流并发与背压；Python `UEnvAgentLoop` 承担请求构造、模型端点、重试、轨迹转换和框架适配。目标允许删除单独 AdapterCore 进程，但不会把流控和权威协议校验迁入 Python；这些逻辑并入 Rust Server。
+
+Worker 当前也不只是资源启动器。EpisodeExecutor（生产源码 `uenv-worker/src/episode/executor.rs:210`） 在 Rust 中掌握 reset/step、超时失败、reward 和轨迹，插件宿主（生产源码 `uenv-worker/src/plugin/host.rs:54`） 在 Rust 中监管 Python/Rust 插件进程。目标重构会清除数据集分支，但应保留 Rust 对 attempt 生命周期的最终控制；Python ComponentHost 只执行用户组件回调。
+
+### 3.8 当前语言分工的源码依据
+
+2026-09-07 再次只读核对远端提交 `af675b20b91c66672b0517b378205603fe424bf3`，工作区干净。Rust 与 Python 文件数量不能直接表示职责；例如 `uenv-server` 中的 Python 文件主要是压力测试和报告脚本，在线服务本身仍是 Rust。因此以下按实际调用职责分类，不用易受生成文件或统计范围影响的文件数作架构依据。
+
+| 现有部分 | 当前实现 |
+|---|---|
+| Bridge | Python 负责 VeRL 等框架适配；`uenv-bridge/core` 的 Rust 服务负责批次流、并发和背压 |
+| Server | 请求处理、调度、AgentJob/Agent 池、状态、持久化、轨迹接收均为 Rust |
+| Worker | 主执行器、控制面、Process/Podman、插件进程、SWE session、评分适配和轨迹上传主要为 Rust |
+| Hub | API、数据库、版本、manifest、schema 校验、包文件处理主要为 Rust |
+| 数学/问答评分 | GSM8K、PubMedQA、SciTab、OlymMATH 的规则当前位于 Rust `plugins/math` |
+| DSCodeBench | Rust 插件负责提取、启动和 reward 组织，实际代码评测脚本为 Python |
+| SWE | Worker 的 session、grader、容器和轨迹大多是 Rust；官方评测包装和 OpenHands 是 Python |
+| Agent | OpenHands 和 VeRL agent loop 为 Python；Server 的 AgentJob/池调度为 Rust |
+| Backend | 通用 Process/Podman 及 SWE 容器驱动为 Rust |
+| 轨迹 | Worker/Server 的落盘、上传和查询主要为 Rust；Python 生成模型与 Agent 事件 |
+| 公共协议 | Proto 同时生成 Rust/Python 类型，业务 JSON 仍有多处手写转换 |
+
+源码依据：Rust Bridge 批次与背压（生产源码 `uenv-bridge/core/src/service.rs:31`）、Rust Server 数据集分流（生产源码 `uenv-server/src/execution_backend.rs:57`）、Rust Worker 主执行器（生产源码 `uenv-worker/src/episode/executor.rs:210`）、Rust Process/Podman 后端接口（生产源码 `uenv-worker/src/backend/mod.rs:11`）、Rust 数学评分（生产源码 `plugins/math/src/score.rs:5`）、Rust 调用 Python 代码评测（生产源码 `plugins/code/src/backends/dscodebench/executor.rs:61`）、Python OpenHands 适配（生产源码 `integrations/openhands/run_swebenchpro_official.py:645`）、Rust 轨迹上传（生产源码 `uenv-worker/src/swe/trajectory_upload.rs:90`）、Rust Hub 包管理（生产源码 `uenv-hub/uenv-hub-core/src/package.rs:385`）。
+
+判断标准很简单：用户需要经常修改的任务规则用 Python；涉及权限、进程、容器、并发、超时、取消、租约、持久化和不可变记录的系统规则用 Rust。这样既保留用户友好性，也避免 Python 扩展绕过平台约束。
 
 ## 4. 迁移后的唯一调用链
 
-```mermaid
-sequenceDiagram
-    participant B as Bridge
-    participant S as Server
-    participant W as Worker / AgentRuntime
-    participant BE as Backend / ToolHost
-    participant E as Environment Host
-    participant A as Agent Host / AgentRunner
-    participant SC as Scorer Host
+执行流程、类间调用和失败收尾统一引用[主方案第 4 章](../uenv_design.md#4-一次任务的完整执行流程)；本计划不再维护第二套目标时序图。
 
-    B->>S: 保存 RunSpec，提交 BatchRequest 中的 EpisodeRequest
-    Note over B,S: EpisodeRequest 用 run_id 引用配置，不内嵌 RunSpec
-    S->>S: 校验并锁定 ExecutionPlan
-    S->>S: 选择 Worker，颁发租约
-    S->>W: DispatchRequest(plan, lease, remaining_timeout_ms, consumed_usage)
-    W->>BE: 创建 session
-    W->>E: prepare(environment, session)
-    W->>BE: ToolHost.prepare 并核验可路由工具
-    W->>A: prepare(agent, tools)，核验模型可见工具
-    W->>E: reset(task, context)
-    E-->>W: Observation
-    W->>A: run(context)
-    A->>W: generate / call_tool / step 请求
-    W->>W: 强制预算、取消与事件记录
-    opt 请求环境动作
-        W->>E: step(action, context)
-        E-->>W: Transition
-        W-->>A: 已校验的 Transition
-    end
-    A-->>W: Outcome
-    W->>E: finalize(outcome, context)
-    E-->>W: 最终 Outcome
-    W->>BE: ToolHost.freeze，再 Backend.freeze
-    W->>W: 保存评分前 checkpoint
-    W->>SC: score(ScoreInput, ScoringContext)
-    SC-->>W: ScoreResult 业务字段
-    W->>W: 补全、校验并记录 ScoreResult
-    W->>W: 首次清理 Scorer → Agent → Tool → Environment → Backend
-    W->>W: 写 terminal、封存轨迹，持久化结果 outbox
-    W->>S: ResultReport(lease, result)
-    S->>S: 事务校验 attempt/lease 并接纳唯一终态
-    S-->>W: ACK
-    S-->>B: 结果与轨迹引用
-```
-
-这里的 Backend 只管理执行资源；Environment 解释任务状态和动作；AgentRunner 负责决策循环；Scorer 只读取冻结后的结果和私有评分材料。四者可以独立选择，但 Server 会在运行前根据 manifest 和 Worker 能力拒绝无法满足的组合。
+迁移验收必须确认三个转换点：Bridge 只提交标准请求；Server 一次解析并锁定计划；Worker 只从派发请求执行该计划。数据集迁移只替换扩展实现，不增加提交、调度、Agent 或评分分支。旧链与新链的并存边界见第 2.2 节。
 
 ## 5. 分阶段实施计划
 
@@ -372,7 +390,7 @@ sequenceDiagram
 
 ### 7.1 能力账本格式
 
-`current_capabilities.md` 继续保存源码级处置总表。正式迁移时，每一行补充以下字段：
+本文第 3 节是源码级处置总表的唯一维护位置。正式迁移时，每一行补充以下字段：
 
 | 字段 | 含义 |
 |---|---|
@@ -508,7 +526,7 @@ sequenceDiagram
 
 ### 11.4 Hub 与数据输入迁移
 
-[主设计第 9 章](uenv_design.md#9-hub代码包与数据存储)规定统一目标。当前本地源码快照中，问答路径可随请求传题目与评分目标；SWE 路径可只传 instance_id，再读取预同步 Hub EnvPackage 的 catalog.json，二者尚未统一。请求解析（生产源码 `uenv-worker/src/episode/payload.rs:38`） · SWE 查询实例（生产源码 `uenv-worker/src/episode/executor.rs:597`） · 包目录读取（生产源码 `uenv-worker/src/swe/env_package.rs:1`）。当前 Hub 的 PublishPackageRequest 只保存调用方显式提交的 artifacts/file_artifacts，并不会识别或自动上传上述目标工程目录；相关存储能力可以复用，但目标打包规则和数据服务仍需实现。当前发布请求（生产源码 `uenv-hub/uenv-hub-types/src/lib.rs:948`） · 当前 artifact 落盘（生产源码 `uenv-hub/uenv-hub-core/src/package.rs:264`）。
+[主设计第 9 章](../uenv_design.md#9-hub代码包与数据存储)规定统一目标。当前本地源码快照中，问答路径可随请求传题目与评分目标；SWE 路径可只传 instance_id，再读取预同步 Hub EnvPackage 的 catalog.json，二者尚未统一。请求解析（生产源码 `uenv-worker/src/episode/payload.rs:38`） · SWE 查询实例（生产源码 `uenv-worker/src/episode/executor.rs:597`） · 包目录读取（生产源码 `uenv-worker/src/swe/env_package.rs:1`）。当前 Hub 的 PublishPackageRequest 只保存调用方显式提交的 artifacts/file_artifacts，并不会识别或自动上传上述目标工程目录；相关存储能力可以复用，但目标打包规则和数据服务仍需实现。当前发布请求（生产源码 `uenv-hub/uenv-hub-types/src/lib.rs:948`） · 当前 artifact 落盘（生产源码 `uenv-hub/uenv-hub-core/src/package.rs:264`）。
 
 待实现：标准化 JSONL 行校验与数据版本/分片/样本索引发布读取接口；准备入口对“自带数据/Hub 引用”的互斥解析；Worker 按计划获取所需文件；私有文件授权、缓存隔离和保留期。复用已有 TaskSpec、TypedConfig、DatasetRef、ArtifactRef；Hub API 请求结构和数据发布元数据仍须定义和测试。本轮修改了 `design` 的 Rust/Python 参考与文档，没有修改远端服务。
 
@@ -516,7 +534,7 @@ sequenceDiagram
 
 ### 11.5 内置数据集评分迁移
 
-迁移清单对每个功能标为保留/修改/重写/删除，不按整个 crate 粗暴处置，详见 `current_capabilities.md`。
+迁移清单对每个功能标为保留/修改/重写/删除，不按整个 crate 粗暴处置，详见本文第 3 节。
 
 文本类：把现有 Rust 评分规则迁到 Python，先保持版本可识别的既有行为；对固定语料做差分，包括空回答、Unicode、数学分数、标签冲突。改善官方评分对齐作为另一个 scorer 版本，不在语言迁移中偷偷改变政策。
 

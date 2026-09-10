@@ -120,7 +120,7 @@ Hub 逻辑上包括元数据数据库和文件存储；wheel、schema 和大文�
 
 除这个数据集代码版本之外，Hub 还管理：其他数据集/Agent/工具的版本化包；数据 revision、样本分片和样本索引；隐藏测试、图片、代码快照等受控文件；容器镜像的不可变引用和 digest；包与数据的读取权限。RunSpec、episode 状态、评分结果和 lease 由 Server 管理，不属于 Hub 包仓库。
 
-tools.py 仅在需要新操作时添加；可以编写带参数/返回类型和说明的 Python 函数，复杂工具实现现有 ToolExecutor。发布工具生成或校验 ToolSpec 的入口、配置 schema、输入/输出 schema 与 interfaces。AgentManifest 只声明支持的接口，不逐个登记工具；因此复用已有 MCP/原生接口时，同一个工具不用分别写各 Agent 的适配。跨数据集复用的工具放入独立包。新增数据集与自定义 Agent 都不意味着必须新增工具。目标调用方式及迁移说明入口见 [用户手册第 7 节](user_guide.md#7-自定义工具)。
+tools.py 仅在需要新操作时添加；可以编写带参数/返回类型和说明的 Python 函数，复杂工具实现现有 ToolExecutor。发布工具生成或校验 ToolSpec 的入口、配置 schema、输入/输出 schema 与 interfaces。AgentManifest 只声明支持的接口，不逐个登记工具；因此复用已有 MCP/原生接口时，同一个工具不用分别写各 Agent 的适配。跨数据集复用的工具放入独立包。新增数据集与自定义 Agent 都不意味着必须新增工具。目标调用方式及迁移说明入口见 [用户手册第 7 节](user_guide.md#6-自定义工具)。
 
 ### 3.3 完整数据集和 ground truth 如何存入 Hub
 
@@ -198,7 +198,7 @@ uenv describe my-org/my-dataset@1.0.0:MyInput # 展开包业务字段
 
 每个字段显示完整路径、类型、必填性、默认值、说明和来源。包类型标出 `models.py` 中的类和已发布版本。命令读取 SDK/Hub 已登记的同一契约，不另建手写目录；Python IDE 通过 `UEnvModel` 类型标注提供相同补全。EpisodeRequest、ExecutionPlan、episode_id、attempt_id、lease、input_digest、plan_digest 和 `TypedConfig.schema_ref` 不进入普通数据集作者视图，由系统自动生成并仅在核心维护文档中说明。
 
-新增业务字段前，作者必须说明**谁填写、谁读取、读后产生什么具体作用**。例如 Adapter 填入 `input.instruction`，Environment.reset 读取它并生成 Agent 的初始观测；不能只写“存入 input”。嵌套对象也要说明每个子字段。说明跟随 `models.py` 的字段定义维护，完整格式见 [字段规范第 0.1 节](field_conventions.md#01-字段必须有明确用途)。没有消费方法或对应用户功能的字段不加入模板；程序只能辅助检查，实际用途仍需审查组件代码。
+新增业务字段前，作者必须说明**谁填写、谁读取、读后产生什么具体作用**。例如 Adapter 填入 `input.instruction`，Environment.reset 读取它并生成 Agent 的初始观测；不能只写“存入 input”。嵌套对象也要说明每个子字段。说明跟随 `models.py` 的字段定义维护，完整格式见 [字段规范第 0.1 节](../development/field_conventions.md#01-字段必须有明确用途)。没有消费方法或对应用户功能的字段不加入模板；程序只能辅助检查，实际用途仍需审查组件代码。
 
 作者的判断规则只有三类：
 
@@ -213,6 +213,8 @@ uenv describe my-org/my-dataset@1.0.0:MyInput # 展开包业务字段
 作者正常编写和调用 Python 模型，不手写 `TypedConfig` 或 `schema_ref`。SDK 只在 RPC/存储边界根据实际模型和已发布包版本生成传输信封。`uenv package validate` 对确定的系统字段遮蔽和已登记常见别名报错，对疑似同义字段给出警告并要求作者判断。程序可以提示 `timeout` 使用 `RunSpec.limits.total_timeout_ms`，但不能确定 `allowed_time` 是否具有相同语义，也不能自动改名。源数据的 `question`、`problem_statement` 在语义确为任务指令时仍由 Adapter 显式映射为 `instruction`。
 
 ## 5. 以实际 GSM8K 参考包为例
+
+### 5.1 评分器入口
 
 dataset_adapter.py 声明 Gsm8kAdapter，完成题目转换和参考答案提取；environment.py 声明 Gsm8kEnvironment，直接继承 Environment，在 reset 中构造题目观测。scorer.py 直接继承 Scorer，实现统一接口并调用公共规则函数：
 
@@ -242,6 +244,59 @@ entrypoints:
 一个 run 只选择一个专属 Scorer。每个得到最终 Outcome 的 attempt 至多产生一个 ScoreResult；Server 只接纳一个 attempt 的结果作为 episode 的权威 ScoreResult。评测与后训练复用其中的 reward；升级规则时发布新的 Scorer 组件版本并创建新 run，不在同一 run 中配置两套评分器。
 
 Scorer 只处理一条 episode，不接收整批结果。平均 reward、成功率、完成数和错误数由系统根据已保存的 ScoreResult 统一计算，属于查询和报表，不回写单条 reward。macro-F1、pass@k 等需要联合多条结果计算的特殊报表，由评测框架或分析程序读取导出的结果后计算；首版数据集包不提供另一种聚合扩展入口。
+
+### 5.2 源数据转换与稳定身份
+
+DatasetAdapter 只把源字段放到标准位置，并将答案/测试放入可选 private_data，和公开输入一同返回。业务字段先在 `models.py` 定义一次：
+
+```python
+from uenv.sdk import UEnvModel
+
+class MyInput(UEnvModel):
+    instruction: str
+
+class MyPrivateData(UEnvModel):
+    answer: str
+```
+
+Adapter 直接返回这些模型；发布工具和 SDK 负责生成、引用并校验 schema，用户不再手写 `typed("MyInput", {...})` 信封：
+
+```python
+from uenv.sdk import DatasetAdapter, PreparedSample
+
+class MyAdapter(DatasetAdapter):
+    def normalize(self, row):
+        return PreparedSample(
+            sample_id=str(row["id"]),
+            input=MyInput(instruction=row["question"]),
+            private_data=MyPrivateData(answer=row["answer"]),
+        )
+```
+
+prepare 工具负责数据集 revision、task_id 和 input_digest。SDK 在进程边界自动把 Python 模型封装为 TypedConfig 并填入已发布的 schema_ref；这个信封是内部传输格式，不是用户编程接口。prepare 用它生成公开 task.json；task 与 private_data 配对进入受控 episode_request.json。系统不再为评分依据生成额外包装文件。无参考依据时省略 private_data；大型测试内容通过其内部的 ArtifactRef 传递。
+
+源数据无 ID 时，Adapter 应从规范化后的公开输入计算稳定内容摘要作为 sample_id；完全相同但必须区分的重复行，数据作者需要在源数据中补稳定 ID，prepare 会拒绝重复 sample_id。不能依赖临时行号、文件绝对路径或随机值。PubMedQA 的外层 JSON key 在导入时作为 id，OlymMATH 的语言/难度从原记录或明确的数据发布配置写入，不能由 Worker 猜测。配对正确性由受信 Adapter/prepare 负责；同类型材料并不意味着适用于同一道题。
+
+Worker 在执行开始前校验 private_data 的已注册 schema，并在交互阶段保持隔离；得到最终 Outcome 后才将它放入 ScoreInput。Environment 和 Agent 只接收公开 TaskSpec；隐藏测试的读取能力只提供给评分器。整个 episode_request.json 含有私有数据，不能作为公共任务文件给 Agent 或写入公开日志。本地验证的是接口与数据副本边界，生产进程和存储隔离仍需实现。
+
+### 5.3 内置数据集的原始字段映射
+
+已有原始脚本到新字段的映射（“私有字段”指 episode_request.json 中 private_data.data 的字段）：
+
+| 数据集 | 原始身份 | 模型可见 input.data | 私有字段 |
+|---|---|---|---|
+| GSM8K | 稳定行 ID | question -> instruction | answer（从参考解的 #### 后提取最终答案） |
+| PubMedQA | JSON 外层 key | QUESTION -> instruction；CONTEXTS -> contexts[] | final_decision -> answer |
+| SciTab | id | claim/paper/paper_id/table_id；table_caption -> caption；table_column_names -> columns[]；table_content_values -> rows[][] | label -> answer |
+| OlymMATH | unique_id | problem -> instruction、language、difficulty、subject | answer |
+| DSCodeBench | problem_id | code_problem -> instruction、library、entry_point | tests artifact、reference_solution（按需）、num_tests、test_seed、evaluation_plan |
+| SWE Verified/Lite/Pro/Smith | instance_id | problem_statement -> instruction、repo、base_commit、workspace_path、runtime_assets[] | test_patch、reference_patch（按需）、FAIL_TO_PASS/PASS_TO_PASS、evaluation_plan（其中选择 harness） |
+
+Code/SWE 原始数据中的测试路径、镜像标签、测试命令先由包的 prepare/build 逻辑转换为有 digest 的产物和类型化 EvaluationPlan。不能把本机绝对路径当成跨机器稳定输入。SWE 变体身份只来自所选数据集包；原始记录中的 `benchmark_variant` 只用于 Adapter 校验数据是否进了正确的包，不再复制为公开输入中的第二个 `variant` 字段。SWE 的具体初始化与官方测试准备仍属于各包 Environment/Scorer，本次参考样例没有实现这些完整操作。
+
+OlymMATH easy/hard 和 en/zh 用字段组合表示；它们共享同一个 adapter/environment/scorer。字段字典把每一层数组和对象都展开，不以“JSON，任意内容”代替定义。
+
+评分规则可复用 `reference/shared/src/uenv_reference_rules` 中的函数，数据集 Scorer 仍直接继承系统 Scorer。文本规则显式读取参考文本；代码规则通过 ScoringContext 请求 harness。OlymMATH 的 reference-corrected-v1 包含未知 LaTeX 命令归一化修正，仍需官方语料对照；规则迁移与版本要求见[重构计划第 3.5 节](../development/source_refactoring_plan.md#35-数据集评分和-openhands)。
 
 ## 6. 三个类的职责与运行阶段
 

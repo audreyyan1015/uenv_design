@@ -157,7 +157,7 @@ MODULES={
 }}
 
 def main():
-    lines=['# UEnv 目标模块与逐文件职责','',
+    lines=['# UEnv 目标模块与逐文件职责','', '本文件由 `scripts/build_module_map.py` 自动生成，禁止手工编辑；修改目标模块时编辑生成器后重新生成。','',
            '本文件是目标组织清单，不是现有代码目录，也不表示这些类已经实现。每个组件采用相同四层命名；用户扩展包采用统一的小型模板，无需复制服务端四层结构。层数由组件角色决定，不是各目录任意选择风格。','',
            '公共根目录：`contracts/proto/uenv/v1/`（系统结构和 RPC 的唯一可编辑来源），`contracts/generated/schema/`、`crates/uenv-contracts/` 和 `python/uenv_contracts/`（全部生成，不手改），`crates/`（Rust 控制服务与资源驱动），`python/`（Python SDK、Bridge 和受管组件 host），`packages/datasets/`、`packages/agents/`、`packages/tools/`（用户同款扩展），`deploy/`、`docs/`、`tests/system/`。','',
            '所有 Rust mod.rs 与 Python __init__.py 只导出模块；下面不逐一列这些样板文件。Rust Cargo.toml 与 Python pyproject.toml 各包一份，锁定依赖。数据集新增业务字段只在包内 models.py 定义，发布工具生成校验 schema；系统 proto 和包模型的职责不重叠。','']
@@ -186,8 +186,8 @@ def main():
               '每个数据集的 dataset_adapter.py、environment.py、scorer.py 与三个专属类统一必需，其余辅助文件按需创建。三个入口类分别直接继承系统基类，并实现 normalize、reset、score；Scorer 只处理单条 episode。公共逻辑通过函数或组合复用，不复制算法。run.yaml 属于训练、评测或实验项目，不是数据集包文件。九个 `reference/datasets/*` 示例已经使用同一 `dataset.yaml + pyproject.toml + src/<package> + tests` 布局；公开运行文件位于 `reference/runs`，生成对象位于 `reference/generated`。产品侧作者 CLI 尚未在生产源码实现。','',
               '基础组件包：packages/agents/plain、packages/agents/openhands 各含 runner.py、AgentManifest、config schema 和 contract tests；AgentManifest 只声明 supported_interfaces 与 required_tool_names。packages/tools/terminal、packages/tools/file_editor 等各含 executor.py、ToolSpec、input/output schema 和 contract tests。packages/adapters/ 下按接口提供工具适配包，每包含 adapter.py、接口声明和 contract tests；新增使用既有接口的工具不修改 Agent 包。原生状态工具的包装可与对应 Agent 作为同一分发包发布，但保持独立版本入口。共享呈现函数和评分辅助放 packages/shared，按版本依赖，禁止复制源文件到各数据集。','',
               f'共列出 {count} 个服务/SDK目标源码文件。实现时允许合并职责紧密且很小的模块，但不能改变依赖方向或把不同领域职责塞入一个大文件。文件数不是验收指标。']
-    (ROOT/'docs').mkdir(parents=True, exist_ok=True)
-    (ROOT/'docs/module_map.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
+    (ROOT/'docs/generated').mkdir(parents=True, exist_ok=True)
+    (ROOT/'docs/generated/module_map.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
     print('Module map:',count,'files')
 
 if __name__=='__main__': main()

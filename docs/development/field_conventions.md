@@ -47,7 +47,7 @@ EpisodeRequest、ExecutionPlan、episode_id、attempt_id、lease、input_digest�
 
 历史源码中的值可以在导入或迁移边界显式转换，但不能进入 vNext 公共协议。
 
-当前检查结论：参考执行器只接受 DispatchRequest；组件、模型参数、评分选择和预算限制只从其中的 ExecutionPlan 读取，remaining_timeout_ms 与 consumed_usage 只收紧时间并延续累计计数，未支持的模式明确拒绝；真实服务与驱动仍待部署验收。已修正的问题与配置消费状态见 [配置审计](configuration_audit.md)。
+配置的实际消费者和实现缺口见[参考实现第 5 节](reference_implementation.md#5-配置消费路径核对)，测试证据见[验证记录](verification.md)。本文件只维护命名、归属和校验规则。
 
 ## 1. 提交与执行
 
@@ -110,10 +110,11 @@ Hub 数据格式目标见主方案第 9 章：标准化 JSONL 行复用 task: Ta
 | 评分器选择 | scorer | RunSpec.scorer 是唯一作者配置，ExecutionPlan.scorer 只锁定同一选择；删除 evaluation_scorer、training_scorer 和 ScoringPlan |
 | episode 奖励标量 | reward | Scorer 在 ScoreResult.reward 产生一次；评测直接读取，Bridge 向训练框架复制到 FrameworkSample.reward，不重算 |
 | 环境转移上限 | max_environment_steps | Rust BudgetEnforcer 不使用 max_steps 别名 |
+| 命令环境变量 | ExecRequest.environment_variables | 不使用 environment，以免与运行组件选择混淆 |
 
 正式评分只在 attempt 得到最终 Outcome 后产生：每个 attempt 至多调用一次 Scorer，Server 只接纳一个 attempt 的结果作为 episode 权威评分。进入评分前失败没有 ScoreResult；已经调用后 status=ok/error 的结果都必须保留。ScoreInput 和 ScoreResult 不定义 RewardPolicy、StepReward、RewardAssignment、purpose 或 stage；RunSpec.purpose 只选择下游消费方。环境原生反馈 environment_reward、最终 reward、任务是否成功 success 含义不同，不能互相冒充。FrameworkSample.reward 的复制不意味着 Bridge 有权重算评分。
 
-`ScoreInput` 不含 `remaining_timeout_ms`。Scorer 的剩余时间只从 `ScoringContext` 读取；调用 harness 时再取该剩余时间与 `private_data.data.evaluation_plan.harness.timeout_ms` 的较小值。
+`ScoreInput` 不含 `remaining_timeout_ms`。Scorer 的剩余时间只从 `ScoringContext` 读取；调用 harness 时再取该剩余时间与 `private_data.data.evaluation_plan.timeout_ms` 的较小值。
 
 SciTab.claim 是待核验陈述，contexts 是背景证据，answer 是私有参考答案，final_answer 是 Agent 最终提交的有序内容段。这些有不同含义与类型，不强行改为 instruction。新数据集可扩展新的业务概念，但不能把已经存在的公共概念换名重定义。
 
@@ -140,7 +141,7 @@ SciTab.claim 是待核验陈述，contexts 是背景证据，answer 是私有参
 
 评分依据不另设存储包装类型；PreparedSample.private_data 是作者侧 UEnvModel；SDK 封装为 TypedConfig 后，在 EpisodeRequest.private_data、ExecutionPlan.private_data、ScoreInput.private_data 中原名传递。材料不正确配对属于导入错误，由受信 Adapter/prepare 负责；本地不宣称 schema 或 plan_digest 能判断标准答案是否正确。
 
-本次补充：DatasetAdapter.normalize(record) 是确定转换，sample_id 只由 PreparedSample 返回；数据 revision 由发布/准备流程记录，episode seed 只在 EpisodeRequest，不再另建 ImportContext。Rust Supervisor 接受一份 DispatchRequest，其中逐 episode 执行配置只有 ExecutionPlan；remaining_timeout_ms 与 consumed_usage 只收紧时间并延续累计用量。HarnessRequest 使用 outcome，唯一评测配置保留在 private_data.data.evaluation_plan.harness。是否需要公共互联网从所选 Environment 的包元数据锁定到 ExecutionPlan.internet_access，后者是 task session 的唯一执行值。backend config 已删除 network_policy 和 workspace_root_profile，runtime_profile 不得承载访问规则或覆盖该值。
+DatasetAdapter.normalize(record) 是确定转换，sample_id 只由 PreparedSample 返回；数据 revision 由发布/准备流程记录，episode seed 只在 EpisodeRequest，不再另建 ImportContext。Rust Supervisor 接受一份 DispatchRequest，其中逐 episode 执行配置只有 ExecutionPlan；remaining_timeout_ms 与 consumed_usage 只收紧时间并延续累计用量。HarnessRequest 使用 outcome，唯一评测配置保留在 private_data.data.evaluation_plan.harness。是否需要公共互联网从所选 Environment 的包元数据锁定到 ExecutionPlan.internet_access，后者是 task session 的唯一执行值。backend config 已删除 network_policy 和 workspace_root_profile，runtime_profile 不得承载访问规则或覆盖该值。
 
 
 ## 5. Outcome 合并后的字段归属

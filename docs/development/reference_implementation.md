@@ -1,4 +1,4 @@
-# vNext.3 可执行参考说明
+# UEnv 参考实现说明
 
 本目录的参考代码用于把设计中的关键边界变成可运行测试。它不是远端生产迁移结果。
 
@@ -108,19 +108,26 @@ sequenceDiagram
 
 `generate(messages)` 和 Environment 的 `step(action)` 都是 AgentRunner 在循环中可调用的能力；它们不是同一层的业务实现。Rust `AgentRuntime` 在副作用发生前拦截模型、工具和环境动作，统一计算预算并写轨迹。多轮循环仍属于 AgentRunner；Worker 负责限制 generation、工具、环境动作和总时间。生产进程使用同一 ComponentHost 协议的 Agent 与 Environment 两个角色实例；Rust 以 AgentHost、EnvironmentHost 两个权限端口防止调用串线，本地同步参考用两个 mock 端口代替真实 IPC。
 
-## 5. 唯一配置来源
+## 5. 配置消费路径核对
 
-Server 解析前，运行用户只在严格分组的 `RunSpec` 选择 Environment、Agent、Backend、模型、工具、Scorer 和 limits；数据集作者只在 Python `models.py` 中用类型标注声明业务字段。默认用户接口不展示 EpisodeRequest、ExecutionPlan、episode_id、attempt_id、lease、digest 或 TypedConfig.schema_ref。数据集 `PackageManifest` 是发布时登记到组件目录的元数据：同一个包可以同时导出 Environment 和 Scorer 入口，但 manifest 不构成运行时的第二个选择器。`RunSpec.environment` 与 `RunSpec.scorer` 是两个角色的唯一选择；它们可以引用同一数据集包，也可以引用分别兼容的包。`PlanResolver` 只读取这些已选组件的执行元数据；包 metadata 及其展示子字段已删除，包 schema_version 也不再要求作者提供。
+本节记录参考代码中谁读取配置，不重新定义字段。命名、归属与单一来源规则见[字段规范](field_conventions.md)，正式执行行为见[主方案第 5 章](../uenv_design.md#5-数据对象与配置来源)。测试结果单独记录在[验证记录](verification.md)。
 
-Server 将组件版本、digest、镜像与截止时间锁定到 `ExecutionPlan`，并汇总 `required_capabilities`；随后 Placement 才用这些要求选择 Worker，PlanResolver 不接收或挑选某个 Worker。Worker 以 DispatchRequest 启动 attempt，所有执行配置只读取其中的 plan；同级 lease、remaining_timeout_ms 和 consumed_usage 是派发授权与累计运行状态，不是逐项覆盖参数。
+| 配置或声明 | 参考读取入口与作用 | 当前边界 |
+|---|---|---|
+| 包 id、version | Python package_loader 生成 schema 地址，Rust ComponentCatalog 查找固定组件 | 已有本地消费路径；不代表 Hub 发布服务已完成 |
+| environment、agent | PlanResolver 锁定后，由 EnvironmentHost.prepare、AgentHost.prepare 使用相应 plan 字段 | 参考使用端口和 mock；真实进程待接入 |
+| backend、runtime、internet_access | PlanResolver 解析组合和镜像；Backend.open 接收锁定后的计划信息 | 真正的 Process/Docker/Podman 驱动与隔离待实现 |
+| model、training | AgentRuntime.generate 交给 ModelProvider，并检查生成记录 | 模型服务为 mock；生产 Bridge、推理端点与训练框架待接入 |
+| tools | PlanResolver 匹配接口；ToolHost.prepare 和 AgentHost.prepare 分别核验同一计划工具表；AgentRuntime.call_tool 使用它 | 已验证端口约束；Python 函数包装、MCP 和 OpenHands 待接入 |
+| scorer | Rust run_score 调用 ScorerHost，补全状态和错误 | 已有本地评分与错误测试；真实 harness 尚未验收 |
+| limits、deadline_at_ms | PlanResolver 固定截止时间；BudgetEnforcer 和 Supervisor 使用派发剩余量限制调用 | 本地预算有效；真实 RPC 授权与累计持久账本待实现 |
+| trajectory_retention_days | 目标由 Server/ArtifactStore 控制保存期，不进入 ExecutionPlan | 当前没有生产消费者，随轨迹存储与回收功能实施 |
 
-后端、ToolHost、模型客户端、组件 host、评分 host 和产物存储作为 Worker 进程依赖注入。它们决定“通过哪个已启动驱动执行”，不携带本次任务的第二份配置。实际 backend、model、tools 和 scorer 仍只来自 plan。ToolGateway 实现 ToolHost，并把 plan.tools 绑定到 Backend 创建的 session；Backend 本身不再接收或选择工具。
+角色端口是基础设施连接，不得另带一组逐 episode 配置。参考执行入口只有 DispatchRequest；其 lease、remaining_timeout_ms、consumed_usage 分别表达授权和累计状态，不覆盖计划选择。
 
-工具只存在一张权威表 `ExecutionPlan.tools`，但必须核验两个实际结果。AgentManifest 只声明有序 supported_interfaces 和不可缺少的 required_tool_names；ToolSpec 声明 entrypoint、config_schema 和 interfaces。PlanResolver 校验工具配置，选择第一个共同接口并锁定 interface/adapter，不维护 Agent×具体工具的配对表。`ToolHost.prepare` 返回当前 session 中真正可路由的工具；`AgentHost.prepare` 返回经过 MCP 或原生适配后模型真正能看到的工具。Supervisor 分别要求二者与同一张计划表完全一致。它们是运行时核验结果，不是可修改的配置，也不落成 `actual_tools` 第二字段。
+旧包 metadata、作者 schema_version、额外 UEnv dependencies 已由加载器和契约拒绝；Python/Cargo 的安装依赖继续由包管理文件管理。字段存在或 schema 通过只能证明格式正确，不能替代上表的消费路径检查。
 
-镜像只在 `ExecutionPlan.runtime.image` 生效。容器解析优先级是 RunSpec 覆盖、TaskSpec 样本镜像、包默认镜像；解析后 Worker 不再查看候选来源。Process backend 只在 RunSpec 显式要求 image 时拒绝；TaskSpec/PackageManifest 镜像是可用的容器方案，本次 Process 执行不消费。容器 backend 缺镜像直接拒绝。
-
-harness 只在 `private_data.data.evaluation_plan.harness` 选择一次。Rust PlanResolver 在原字段上补全 digest，并将它纳入与其他组件相同的版本和能力检查，不再复制为第二个 plan 字段。
+Python validator 递归执行完整 JSON Schema；Rust ContractSchema 参考只读取类型与字段集合，并进行控制链需要的浅层形状与语义检查。生产边界必须接入完整生成类型或 validator。其余未实现能力统一见第 8 节。
 
 ## 6. 轨迹与评分
 
@@ -306,7 +313,7 @@ sequenceDiagram
   Note over W,E: Rust Worker 强制处理失败、取消、超时和资源清理
 ```
 
-AgentContext 不是另一个调度服务。它在 Python 中向 Agent 提供 task、observation、step、generate 和工具入口；调用必须进入 Rust `AgentRuntime`，由它在副作用发生前检查取消、截止时间和对应预算。Python 只把框架调用转换成协议，不能直连模型后再补报、不能自行增加次数、延长截止时间或封存轨迹。本地 Rust 参考把受控调用集中在 [AgentRuntime](../reference-control/src/runtime.rs)。open、prepare、Agent.run、freeze 以及每次模型/工具/环境/评分调用都接收同一预算派生的当前 remaining_ms。清理固定为 ScorerHost → AgentHost → ToolHost → EnvironmentHost → Backend；`freeze()`、`close()` 都必须幂等，某一步失败也继续尝试后续步骤。close 使用平台固定的清理超时，不能因 episode 预算已耗尽而跳过。
+AgentContext 不是另一个调度服务。它在 Python 中向 Agent 提供 task、observation、step、generate 和工具入口；调用必须进入 Rust `AgentRuntime`，由它在副作用发生前检查取消、截止时间和对应预算。Python 只把框架调用转换成协议，不能直连模型后再补报、不能自行增加次数、延长截止时间或封存轨迹。本地 Rust 参考把受控调用集中在 [AgentRuntime](../../reference-control/src/runtime.rs)。open、prepare、Agent.run、freeze 以及每次模型/工具/环境/评分调用都接收同一预算派生的当前 remaining_ms。清理固定为 ScorerHost → AgentHost → ToolHost → EnvironmentHost → Backend；`freeze()`、`close()` 都必须幂等，某一步失败也继续尝试后续步骤。close 使用平台固定的清理超时，不能因 episode 预算已耗尽而跳过。
 
 单轮问答仍调用同一个 Agent.run，只生成一次回答，可以不调用 step。多轮策略由 AgentRunner 决定，Rust Worker 强制公共预算；Supervisor 不再套一层模型决策循环。多轮中的公开反馈来自 Environment.step 的 Observation 或工具结果；这些内容会写入轨迹，但正式 ScoreResult 只在最终 Outcome 冻结后产生一次。
 
@@ -354,4 +361,4 @@ classDiagram
 
 工具不是 Agent 的父类，Backend 也不是 Environment 的父类。它们通过受控接口组合：Agent 决定调用，工具完成操作，后端提供资源能力。ProcessBackend、DockerBackend、PodmanBackend 在 Worker 侧实现统一后端协议；这不意味着 Python ABC 的继承关系可以直接跨语言执行。ToolHost 返回“能否路由”，AgentHost 返回“模型能否看见”；Supervisor 把两者分别与唯一 `ExecutionPlan.tools` 核对，返回值不成为第二份工具配置。
 
-状态环境的动作工具可以调用 AgentContext.step；文件工具通过 session 操作文件。一次动作只执行一次，不能先由文件工具修改，再让 Environment.step 重复修改。只操作 SDK 会话状态的原生工具无需经过任务 Backend，但仍遵守工具选择、平台安全底线、计数和记录。工具使用规则见[主设计第 6.4 节](uenv_design.md#64-工具定义接入与调用)。
+状态环境的动作工具可以调用 AgentContext.step；文件工具通过 session 操作文件。一次动作只执行一次，不能先由文件工具修改，再让 Environment.step 重复修改。只操作 SDK 会话状态的原生工具无需经过任务 Backend，但仍遵守工具选择、平台安全底线、计数和记录。工具使用规则见[主设计第 6.4 节](../uenv_design.md#64-工具定义接入与调用)。

@@ -7,12 +7,11 @@
 | 需要查什么 | 唯一维护位置 |
 |---|---|
 | 目标系统的职责、流程与接口规则 | 本文 |
-| 原有源码能力及保留、修改、重写范围 | [当前能力清单](current_capabilities.md) |
-| 分阶段改造、旧接口替换及验收要求 | [源码重构计划](source_refactoring_plan.md) |
-| 参考实现已覆盖什么、缺什么、哪些事项待决定 | [参考实现说明](reference_sdk_vnext3.md#8-实现状态与待决事项) |
-| 已运行的测试及其结果 | [验证记录](verification.md) |
-| 用户操作和包文件模板 | [用户指南](user_guide.md)、[数据集模板](dataset_package_template.md) |
-| 完整字段约束与目标源码目录 | [字段规范](field_conventions.md)、[字段字典](field_dictionary.md)、[模块清单](module_map.md) |
+| 原有能力、源码处置、分阶段改造与验收要求 | [源码重构计划](development/source_refactoring_plan.md) |
+| 参考实现已覆盖什么、缺什么、哪些事项待决定 | [参考实现说明](development/reference_implementation.md#8-实现状态与待决事项) |
+| 已运行的测试及其结果 | [验证记录](development/verification.md) |
+| 用户操作和包文件模板 | [用户指南](guides/user_guide.md)、[数据集模板](guides/dataset_package_template.md) |
+| 完整字段约束与目标源码目录 | [字段规范](development/field_conventions.md)、[字段字典](generated/field_dictionary.md)、[模块清单](generated/module_map.md) |
 
 ## 1. 系统目标与范围
 
@@ -162,7 +161,7 @@ flowchart LR
 
 Agent host 与 Environment host 使用同一组件加载协议的不同权限实例。Environment 与 sandbox 工具随 Process/Docker/Podman session 放置；Agent host 不随任务镜像进入容器。Scorer 单独持有私有材料权限。
 
-系统不引入 Agent 池。Server 只调度 Worker，Worker 为当前 attempt 管理 Agent 会话，退出时关闭并撤销访问。后端资源是否预热属于资源性能优化，与 Agent 调度分开。系统内部进程接口的详细图见 [参考说明](reference_sdk_vnext3.md#9-系统接口接入目标)。
+系统不引入 Agent 池。Server 只调度 Worker，Worker 为当前 attempt 管理 Agent 会话，退出时关闭并撤销访问。后端资源是否预热属于资源性能优化，与 Agent 调度分开。系统内部进程接口的详细图见 [参考说明](development/reference_implementation.md#9-系统接口接入目标)。
 
 ## 4. 一次任务的完整执行流程
 
@@ -529,7 +528,7 @@ UEnv 系统协议的唯一可编辑来源是 `contracts/proto/uenv/v1/*.proto`�
 
 “同义同名”不等于把不同含义都叫一个名字。SciTab 的 claim 是待核验陈述，contexts 是证据，二者不是任务指令别名；参考答案 answer、模型最终输出 final_answer 与评分 success 也不同。schema_ref/data 是扩展类型信封，不能在 data 内另放 task_id、backend、tools 等公共协议同义字段。新增包发布前也需按此规则审查业务语义，Schema 只能自动拒绝已定义的旧字段和不符合结构的数据，不能自动证明任意新字段没有语义重复。
 
-更详细的逐字段来源和禁止项见 [字段统一规则](field_conventions.md)。
+更详细的逐字段来源和禁止项见 [字段统一规则](development/field_conventions.md)。
 
 包 metadata 已删除；包声明不提供 metadata、display_name、description、tags 等没有实际消费者的字段。运行行为只能由已定义的运行字段决定。每个字段及其嵌套字段都要说明：谁填写、谁读取、读后产生什么作用。生成 schema 与文档不得另行手改。
 
@@ -537,7 +536,7 @@ UEnv 系统协议的唯一可编辑来源是 `contracts/proto/uenv/v1/*.proto`�
 
 额外语义校验不能只靠 JSON Schema：TaskSpec.input schema 必须与包声明一致；tool_call/result 必须配对；完整轨迹 sequence 唯一连续，部分恢复轨迹保留原序号与缺口；token/logprob/mask 等长；policy version 与生成实际响应一致；score error 时 reward/success 为空；tests_passed <= tests_run；重复请求内容摘要一致；引用 digest 对应真实内容；图片/文件引用角色权限正确。具体校验由各对象的 validator 实施。
 
-Python/Rust 字段、函数和模块用 snake_case，类/结构体/trait 用 PascalCase，常量用 UPPER_SNAKE_CASE；包 ID 使用稳定 namespace。系统模块按职责组织，依赖方向及逐文件分工由 [模块清单](module_map.md) 规定。内部类须具备独立状态、生命周期、可替换实现或权限/进程/事务职责；请求组装等纯操作使用函数。
+Python/Rust 字段、函数和模块用 snake_case，类/结构体/trait 用 PascalCase，常量用 UPPER_SNAKE_CASE；包 ID 使用稳定 namespace。系统模块按职责组织，依赖方向及逐文件分工由 [模块清单](generated/module_map.md) 规定。内部类须具备独立状态、生命周期、可替换实现或权限/进程/事务职责；请求组装等纯操作使用函数。模块导出文件不承载业务逻辑；辅助函数按具体职责归属，不集中到无界 utils 文件，也不把一个长函数拆成多个 include 文件代替职责拆分。
 
 ## 6. 数据集、智能体与工具扩展接口
 
@@ -575,7 +574,7 @@ classDiagram
   AgentRunner <|-- OpenHandsAdapter
 ```
 
-图只展示两套示例的继承关系，其他数据集使用同一规则。全部九个数据集的专属类列在 [数据集模板](dataset_package_template.md#9-内置数据集的继承关系)。选择数据集不自动选择 Agent。
+图只展示两套示例的继承关系，其他数据集使用同一规则。全部九个数据集的专属类列在 [数据集模板](guides/dataset_package_template.md#9-内置数据集的继承关系)。选择数据集不自动选择 Agent。
 
 Host 在加载前按对应角色 schema 校验 ComponentSpec.config，只把已校验的 config.data 字典传给用户类构造函数，基类保存为 self.config；无配置时显式传 `{}`。用户不实现 Rust Supervisor 或组件进程管理器。
 

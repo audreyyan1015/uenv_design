@@ -21,7 +21,11 @@ Python 中原有的 `EpisodeRuntime`、计划解析器、工具权威路由和 `
 ```text
 design/
 ├── README.md              # 仓库入口与运行说明
-├── docs/                  # 设计方案、用户指南、字段规范、重构计划与验证记录
+├── docs/
+│   ├── uenv_design.md      # 主方案
+│   ├── guides/            # 用户操作与数据集模板（2 篇）
+│   ├── development/       # 字段、重构、参考实现、验证（4 篇）
+│   └── generated/         # 自动生成的字段字典与模块清单（2 篇）
 ├── scripts/               # 生成与验证工具，以及 requirements.txt
 ├── contracts/             # 生成的公共协议和内置组件 JSON Schema
 ├── reference/             # Python SDK、数据集、智能体与工具参考示例
@@ -32,24 +36,25 @@ design/
 └── .gitattributes          # 文本换行规则
 ```
 
-文档中的代码路径以仓库根目录为基准，点击链接则按所在文档解析。`docs/module_map.md` 描述未来生产系统的目录规划；上面列出的是当前设计仓库的实际组织。维护命令统一从仓库根目录运行。
+文档中的代码路径以仓库根目录为基准，点击链接则按所在文档解析。`docs/generated/module_map.md` 描述未来生产系统的目录规划；上面列出的是当前设计仓库的实际组织。维护命令统一从仓库根目录运行。
 
 ## 阅读顺序
 
-| 文档 | 内容 |
+先读主方案了解系统；运行用户按需查 guides，开发维护者查 development。generated 只用于查询，不手工编辑。
+
+| 文档 | 唯一负责的内容 |
 |---|---|
-| [完整 UEnv 设计方案](docs/uenv_design.md) | 按目标、用户输入输出、部署、执行流程、数据、扩展、后端、评分轨迹、Hub、恢复组织的十章主方案 |
-| [当前功能与处置清单](docs/current_capabilities.md) | 基于当前源码判断保留、修改、重写与删除 |
-| [源码重构计划](docs/source_refactoring_plan.md) | 从当前源码迁移到目标架构的阶段、保护措施、回退和删除条件 |
-| [目标代码组织](docs/module_map.md) | Bridge、Server、Worker、Python 组件 host、SDK、Hub 的逐文件职责 |
-| [字段与配置审计](docs/configuration_audit.md) | 一个含义一个字段名、一个执行配置一个生效来源 |
-| [核心维护者字段字典](docs/field_dictionary.md) | 当前参考生成器导出的完整内部协议与扩展 schema；普通用户无需阅读 |
-| [字段统一规则](docs/field_conventions.md) | 字段命名、归属、转换和校验边界 |
-| [用户手册与模板](docs/user_guide.md) | 新增数据集、自定义 Agent 和工具 |
-| [数据集统一包模板](docs/dataset_package_template.md) | 所有数据集使用同一包结构，并声明自己的 Adapter、Environment、Scorer 三个职责入口 |
-| [参考实现说明](docs/reference_sdk_vnext3.md) | 参考实现边界、待决事项与内部进程接入图 |
-| [验证结果](docs/verification.md) | 已验证内容与未验证边界 |
-| [逐条问题答复](docs/responses.md) | 前期问题的简明答复 |
+| [系统设计方案](docs/uenv_design.md) | 系统职责、执行流程和对外行为 |
+| [用户指南](docs/guides/user_guide.md) | 运行、查询、取消任务，以及自定义 Agent 和工具 |
+| [数据集包模板](docs/guides/dataset_package_template.md) | 数据集文件、三个入口、样本转换、发布内容及内置示例 |
+| [字段规范](docs/development/field_conventions.md) | 命名、归属、配置单一来源与字段用途要求 |
+| [源码重构计划](docs/development/source_refactoring_plan.md) | 原有能力与源码证据、保留/修改/重写/删除、迁移和验收 |
+| [参考实现说明](docs/development/reference_implementation.md) | 当前代码对应关系、实际消费者、实现缺口与内部接入目标 |
+| [验证记录](docs/development/verification.md) | 运行了哪些检查、结果怎样、尚未验证什么 |
+| [生成字段字典](docs/generated/field_dictionary.md) | 从当前参考契约生成的完整字段查询 |
+| [生成模块清单](docs/generated/module_map.md) | 从目标模块清单生成的逐文件职责 |
+
+相同规则只在负责它的文档维护。主方案引用字段规范；指南用步骤和示例说明如何使用，不复制完整协议；参考说明记录代码实现状态，验证记录只记录检查证据。修改规范时同步代码及生成器，重新生成 generated，不在生成文档中单独修正。
 
 ## 参考代码
 

@@ -100,10 +100,10 @@ def score_candidate(scorer, answer, private_data, context=None):
 
 class ContractTests(unittest.TestCase):
     def test_contract_authoring_sources_are_unambiguous(self):
-        template = (ROOT / "docs/dataset_package_template.md").read_text(encoding="utf-8")
-        module_map = (ROOT / "docs/module_map.md").read_text(encoding="utf-8")
+        template = (ROOT / "docs/guides/dataset_package_template.md").read_text(encoding="utf-8")
+        module_map = (ROOT / "docs/generated/module_map.md").read_text(encoding="utf-8")
         main_design = (ROOT / "docs/uenv_design.md").read_text(encoding="utf-8")
-        user_guide = (ROOT / "docs/user_guide.md").read_text(encoding="utf-8")
+        user_guide = (ROOT / "docs/guides/user_guide.md").read_text(encoding="utf-8")
         self.assertNotIn("  schemas/", template)
         self.assertIn("models.py", template)
         self.assertIn("contracts/proto/uenv/v1/", module_map)
