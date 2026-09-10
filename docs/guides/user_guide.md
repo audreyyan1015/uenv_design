@@ -29,12 +29,22 @@ flowchart LR
   YAML[run.yaml] --> READ[CLI 调用 Bridge 读取 YAML]
   READ --> NORMALIZE[Bridge 共用配置函数<br/>补齐声明默认值并校验]
   SDK[SDK 提供配置对象] --> NORMALIZE
-  NORMALIZE --> RUN[完整 RunSpec]
-  RUN --> SERVER[Server 权威校验<br/>锁定 ExecutionPlan]
-  SERVER --> WORKER[Worker 按计划执行]
+  NORMALIZE --> CREATE[Bridge 提交 RunSpec<br/>创建 run]
+  CREATE --> SAVE[Server 校验并保存 RunSpec]
+  SAVE -->|确认 run_id| BUILD[Bridge 组装 EpisodeRequest<br/>通过 run_id 引用配置]
+  TASK[已准备的任务与可选私有材料] --> BUILD
+  BUILD --> SUBMIT[Bridge 提交 BatchRequest<br/>包含一条或多条 EpisodeRequest]
+  SUBMIT --> SERVER[Server 读取对应 RunSpec<br/>校验任务并生成 ExecutionPlan]
+  SAVE -.读取已保存配置.-> SERVER
+  SERVER --> WORKER[派发给 Worker 执行]
 ```
 
-Server 接收结构化 RunSpec，不接收 YAML 文件路径；Worker 只接收执行计划。CLI 不提供同一字段的另一套覆盖参数，环境变量也不能覆盖已提交配置。运行身份在创建 run 后由 SDK 复用；九份设计示例显式给出稳定 run_id，便于对应生成夹具。
+Bridge 与 Server 之间有两个明确步骤：
+
+1. **创建 run**：Bridge 通过 create_run 提交完整 RunSpec，Server 校验并保存本次运行配置。
+2. **提交任务**：Bridge 通过 submit_batch 提交 BatchRequest，其中每条 EpisodeRequest 携带任务、可选私有材料和 run_id。Server 按 run_id 读取已经保存的 RunSpec，为每条任务生成执行计划。
+
+因此，任务提交接口接收 EpisodeRequest 所在的批次请求，不能仅提交 RunSpec 就开始执行；EpisodeRequest 也不内嵌另一份 RunSpec。Server 不读取用户 YAML 文件，Worker 接收包含 ExecutionPlan 的派发请求。CLI 不提供同一字段的另一套覆盖参数，环境变量也不能覆盖已提交配置。运行身份在创建 run 后由 SDK 复用；九份设计示例显式给出稳定 run_id，便于对应生成夹具。
 
 上述 CLI/生产 SDK 尚未完成接入。本地用 reference/package_loader.py 的 expand_run 演示两种输入共用的补值与校验过程，不能把夹具生成器当作已部署 Bridge。
 

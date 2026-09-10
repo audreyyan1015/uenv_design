@@ -108,7 +108,7 @@ uenv run cancel RUN_ID
 uenv trajectory export --run RUN_ID --sample SAMPLE_ID --format jsonl
 ```
 
-CLI 调用 Bridge 读取 run.yaml；SDK 提供配置对象时也使用同一配置函数，按声明补齐默认值并校验为完整 RunSpec，再提交 Server。Server 不接收 YAML 文件，Worker 不重新读取用户配置。CLI 不提供另一套字段覆盖参数；提交前可用 `--dry-run` 查看展开结果。包不会隐式选择 Agent 或 Backend。具体填写方法统一见[用户指南第 2 节](guides/user_guide.md#2-填写运行配置)。
+CLI 调用 Bridge 读取 run.yaml；SDK 提供配置对象时也使用同一配置函数，按声明补齐默认值并校验为完整 RunSpec，通过 create_run 提交给 Server 保存。随后通过 submit_batch 提交包含 EpisodeRequest 的 BatchRequest，各任务以 run_id 引用该配置；Server 结合二者生成执行计划。Server 不接收 YAML 文件，Worker 不重新读取用户配置。CLI 不提供另一套字段覆盖参数；提交前可用 `--dry-run` 查看展开结果。包不会隐式选择 Agent 或 Backend。具体填写方法统一见[用户指南第 2 节](guides/user_guide.md#2-填写运行配置)。
 
 Python 客户端提供 `UEnvClient.create_run(RunSpec)`、`submit_batch(tasks)`、`get_run(run_id)`、`get_results(run_id, sample_id)`、`watch_results(run_id)`、`cancel_run(run_id)`、`load_trajectories(run_id, sample_id)`。同一样本可有多个 episode，因此结果查询返回列表；SDK 用返回的执行身份定位具体结果，不任取一个，也不依赖完成顺序。
 
