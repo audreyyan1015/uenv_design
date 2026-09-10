@@ -128,6 +128,10 @@ pub trait ToolHost {
     fn close(&mut self) -> Result<()>;
 }
 
+/// Converts the selected model API using command.tools as the only tool table.
+/// Descriptions/input schemas come from these registered component versions.
+/// Native tool requests become ToolCall values; control fields come from the
+/// command and bindings, never from model-authored configuration.
 pub trait ModelProvider {
     fn generate(&mut self, request: &Value) -> Result<Value>;
 }

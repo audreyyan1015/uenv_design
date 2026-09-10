@@ -144,6 +144,14 @@ class Environment(ABC):
         """Optional plugin cleanup; Worker still owns underlying resources."""
 
 
+class AgentRuntimeError(RuntimeError):
+    """SDK representation of the existing Worker ErrorRecord, not a new wire type."""
+
+    def __init__(self, error: dict):
+        self.error = deepcopy(error)
+        super().__init__(error['code'])
+
+
 class AgentContext(ABC):
     """Worker-provided capability view; it never owns scheduling or budgets."""
 
@@ -154,7 +162,7 @@ class AgentContext(ABC):
 
     @abstractmethod
     async def generate(self, messages: list[dict]) -> dict:
-        """Request one model generation through the Rust AgentRuntime gate."""
+        """Request one generation through Rust; denied operations raise AgentRuntimeError."""
 
     @abstractmethod
     async def call_tool(self, call: dict) -> dict:

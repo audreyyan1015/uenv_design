@@ -196,7 +196,7 @@
     },
     "Message": {
       "type": "object",
-      "description": "模型可见消息；工具调用详情通过 ToolCall 单独记录",
+      "description": "规范模型消息；assistant 可包含已归一化的工具请求，实际执行另记事件",
       "properties": {
         "role": {
           "type": "string",
@@ -220,13 +220,58 @@
           "description": "不透明身份标识；不得用其他实体的 ID 代填",
           "minLength": 1,
           "maxLength": 256
+        },
+        "tool_calls": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/ToolCall"
+          },
+          "description": "assistant 请求工具；复用统一结构，模型 API 只映射调用身份、名字和参数",
+          "minItems": 1
         }
       },
       "required": [
         "role",
         "content"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "tool_calls"
+            ]
+          },
+          "then": {
+            "properties": {
+              "role": {
+                "const": "assistant"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "role": {
+                "const": "tool"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "tool_call_id"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "tool_call_id"
+              ]
+            }
+          }
+        }
+      ]
     },
     "TypedConfig": {
       "type": "object",
@@ -1753,7 +1798,15 @@
           "items": {
             "$ref": "urn:uenv:vnext:contracts#/$defs/ContentPart"
           },
-          "description": "该次原始输出"
+          "description": "该次原始内容输出；结构化工具请求在 tool_calls 中保留"
+        },
+        "tool_calls": {
+          "type": "array",
+          "items": {
+            "$ref": "urn:uenv:vnext:contracts#/$defs/ToolCall"
+          },
+          "description": "本次模型请求的工具列表；身份和参数源自模型，implementation、generation_id、timeout_ms 由受控模型适配绑定；实际获准执行另写 tool_call 事件",
+          "minItems": 1
         },
         "output_token_count": {
           "type": "integer",
@@ -1826,6 +1879,29 @@
         "duration_ms"
       ],
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "finish_reason": {
+                "const": "tool_calls"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "tool_calls"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "tool_calls"
+              ]
+            }
+          }
+        }
+      ],
       "dependentRequired": {
         "output_logprobs": [
           "output_token_ids"
@@ -1837,7 +1913,7 @@
     },
     "ToolCall": {
       "type": "object",
-      "description": "规范工具调用；动态 arguments 使用工具声明的 schema 递归验证",
+      "description": "规范工具调用；模型请求与实际执行复用字段，阶段由所属消息或事件确定；动态 arguments 按工具 schema 验证",
       "properties": {
         "tool_call_id": {
           "type": "string",

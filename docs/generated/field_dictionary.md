@@ -64,13 +64,14 @@ TypedConfig 的 data 不是任意 JSON：必须递归满足 schema_ref 指向的
 
 ## Message
 
-模型可见消息；工具调用详情通过 ToolCall 单独记录
+规范模型消息；assistant 可包含已归一化的工具请求，实际执行另记事件
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
 | `role` | string | 是 | 消息来源；枚举：system, user, assistant, tool |
 | `content` | array<ContentPart> | 是 | 有序内容段 |
 | `tool_call_id` | string | 否 | 不透明身份标识；不得用其他实体的 ID 代填 |
+| `tool_calls` | array<ToolCall> | 否 | assistant 请求工具；复用统一结构，模型 API 只映射调用身份、名字和参数 |
 
 ## TypedConfig
 
@@ -472,7 +473,8 @@ Worker 产生候选结果，Server 校验租约后形成唯一权威终态
 | `tokenizer` | ResolvedComponent | 否 |  |
 | `source` | string | 是 | 真实或模拟；枚举：real, simulated |
 | `messages` | array<Message> | 是 | 该次真实输入消息 |
-| `response` | array<ContentPart> | 是 | 该次原始输出 |
+| `response` | array<ContentPart> | 是 | 该次原始内容输出；结构化工具请求在 tool_calls 中保留 |
+| `tool_calls` | array<ToolCall> | 否 | 本次模型请求的工具列表；身份和参数源自模型，implementation、generation_id、timeout_ms 由受控模型适配绑定；实际获准执行另写 tool_call 事件 |
 | `output_token_count` | integer | 是 | 本次实际生成 token 数；预算统计的唯一来源；最小值：0 |
 | `input_token_ids` | array<integer> | 否 | 真实输入 token 序列 |
 | `output_token_ids` | array<integer> | 否 | 真实生成 token 序列；存在时长度必须等于 output_token_count |
@@ -483,7 +485,7 @@ Worker 产生候选结果，Server 校验租约后形成唯一权威终态
 
 ## ToolCall
 
-规范工具调用；动态 arguments 使用工具声明的 schema 递归验证
+规范工具调用；模型请求与实际执行复用字段，阶段由所属消息或事件确定；动态 arguments 按工具 schema 验证
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
@@ -768,7 +770,7 @@ harness 结果，候选失败和 harness 错误不同
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
-| `history_policy` | string | 是 | 模型上下文策略；枚举：full, last_generation；提交默认值："full" |
+| `history_policy` | string | 是 | full 保留完整历史；last_generation 保留系统提示、初始任务和最近一次完整模型及工具交互；枚举：full, last_generation；提交默认值："full" |
 | `system_prompt` | string | 是 | 智能体系统提示词；空表示不额外添加；提交默认值："" |
 
 ## OpenHandsAgentConfig

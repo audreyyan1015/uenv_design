@@ -66,7 +66,7 @@
   "limits": {
     "total_timeout_ms": 300000,
     "finalize_reserve_ms": 120000,
-    "max_generations": 30,
+    "max_generations": 1,
     "max_tool_calls": 60,
     "max_environment_steps": 0,
     "max_total_output_tokens": 32768
@@ -136,5 +136,5 @@
   ],
   "internet_access": false,
   "deadline_at_ms": 1800000300000,
-  "plan_digest": "sha256:d027da6467d7c2982266fc0c34814426c3cc2571b4d51532ec9c8d3f2cc958f7"
+  "plan_digest": "sha256:627075773812649d487e9549893c45d8ef8a05ae55aea462926c2f263e7f582d"
 }

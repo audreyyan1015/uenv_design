@@ -69,7 +69,7 @@
     "limits": {
       "total_timeout_ms": 300000,
       "finalize_reserve_ms": 120000,
-      "max_generations": 30,
+      "max_generations": 1,
       "max_tool_calls": 60,
       "max_environment_steps": 0,
       "max_total_output_tokens": 32768

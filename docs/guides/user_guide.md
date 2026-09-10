@@ -85,7 +85,7 @@ finalize_reserve_ms 是 limits 中为结果收集、冻结和可选评分预留�
 
 不同作用范围的限制分别保留：工具 timeout_ms 限制一次工具调用，limits.total_timeout_ms 限制整个 episode；model.generation.max_output_tokens 限制一次生成，limits.max_total_output_tokens 限制累计输出。前者都不能放大后者。
 
-PlainAgent 的 history_policy 用于选择实际历史策略；OpenHands 的固定 SDK 历史处理不要求用户填写。OpenHands 不公开 sdk_iteration_limit，模型调用预算统一在 limits；真实接入时须验证 SDK 内部迭代与模型调用的关系，不能直接把两个计数当成同一个数。
+PlainAgent 的 history_policy=full 保留完整历史；last_generation 保留系统提示、初始任务和最近一次完整的 assistant/tool 交互，工具请求和结果一起保留。该策略只改变下一次输入，不裁剪已保存轨迹。OpenHands 的固定 SDK 历史处理不要求用户填写。OpenHands 不公开 sdk_iteration_limit，模型调用预算统一在 limits；真实接入时须验证 SDK 内部迭代与模型调用的关系，不能直接把两个计数当成同一个数。
 
 ### 2.5 更换 Agent、Backend 和镜像
 
@@ -134,13 +134,17 @@ RUN_ID 使用提交返回的运行标识，SAMPLE_ID 使用样本标识。运行
 
 设计约束：后续不引入 Agent 池。RunSpec.agent 只指定 implementation 和 config，不提供 pool_id、agent_pool_id 或 placement。Agent 由本次任务的 Worker 管理；用户不注册 Agent 池，也不配置独立 Agent 容量或调度。模型服务端点通过运行配置由 Bridge 传入，Agent 不加载模型权重。
 
-实现异步 `AgentRunner.run(context)`。context 只提供公开 TaskSpec、观测、获准工具描述和 `generate/call_tool/step` 能力；三个操作统一使用 `await`，另有只读 seed。不同 Agent 的模型消息由其自行构造。模型调用必须通过 Worker 的 AgentRuntime/ModelProvider，以便在实际调用前强制预算并保留真实生成信息；Agent 不直连端点。Agent 不接收 private_data，也不能直接写 ScoreResult。
+实现异步 `AgentRunner.run(context)`。context 只提供公开 TaskSpec、观测、获准工具描述和 `generate/call_tool/step` 能力；三个操作统一使用 `await`，另有只读 seed。不同 Agent 的模型消息由其自行构造。模型调用必须通过 Worker 的 AgentRuntime → ModelProvider，以便在实际调用前强制预算并保留真实生成信息；Agent 不直连端点。Agent 不接收 private_data，也不能直接写 ScoreResult。
 
-参考 extension_templates.py 中的 PlainAgent 是无工具单轮例。正式 PlainAgent 还提供明确的历史策略与工具循环；OpenHandsAdapter 将 SDK Conversation 事件转换成同样的模型、工具和终态记录。用户可以让数学选择 OpenHands，或让仓库修复选择 PlainAgent+工具，只要能力满足。
+参考 extension_templates.py 中的 PlainAgent 已实现多轮工具循环和历史策略；当前采用 PlainAgent 的 run.yaml 示例初始都设置 limits.max_generations=1，表示最多调用模型一次，而不是把 Agent 实现限制为单轮。OpenHandsAdapter 将 SDK Conversation 事件转换成同样的模型、工具和终态记录。用户可以让数学选择 OpenHands，或让仓库修复选择 PlainAgent+工具，只要能力满足。
+
+PlainAgent 的通用流程是：生成 → 若为最终回答则返回 → 若请求工具则执行并追加反馈 → 再次生成。状态交互可通过已选择且调用 Environment.step 的工具接入；PlainAgent 不根据 dataset 名称猜测动作。自行实现直接 step 策略时仍使用相同的 AgentContext。
+
+Worker 拒绝超出 generation/tool/token 预算的调用时，SDK 以 AgentRuntimeError 传递原 ErrorRecord；PlainAgent 返回 termination_reason=budget_exhausted，由 Worker 继续收集和可选评分。取消、网络故障和权限错误继续作为错误处理，不能伪装成正常回答。单次输出达到长度上限也保留该次输出并以 budget_exhausted 收尾，不自动拼接伪造的后续文本。
 
 **自定义 Agent 不等于自定义工具，也不需要逐个编写工具适配。**AgentManifest 只填写实现入口、配置 schema、有序 supported_interfaces 和 required_tool_names。自己写 Agent 循环时，获取 UEnv 提供的获准工具描述，通过 call_tool 调用；基于已支持框架时，复用 UEnv 的框架接入或该框架的 MCP 支持。只有引入未支持的工具接口或框架专属语义时，才需补一次接口适配；普通工具可复用这份接入。
 
-接口写法可直接查看[PlainAgent 示例](../../reference/extension_templates.py)。该示例只演示一次文本生成；需要工具循环或状态交互时，由 Agent 自己组织调用顺序，仍使用 context 提供的异步操作。框架接入的实际完成情况见[参考实现状态](../development/reference_implementation.md#8-实现状态与待决事项)。
+接口写法可直接查看[PlainAgent 示例](../../reference/extension_templates.py)。该示例收到最终回答就结束；收到工具请求则按顺序调用获准工具，将结果加入下一次模型输入。上限只由 limits.max_generations 指定：例如改为 5 表示最多生成 5 次，不强制凑满次数。tools=[] 且模型直接回答时通常仍只有一次生成，不自动发送“继续”或要求重答。框架接入的实际完成情况见[参考实现状态](../development/reference_implementation.md#8-实现状态与待决事项)。
 
 ## 6. 自定义工具
 

@@ -1244,3 +1244,130 @@ fn collection_scoring_failure_preserves_trace_and_is_not_success() {
     assert_eq!(manifest["trajectory_status"], "final_complete");
     assert!(scorer.closed && backend.closed);
 }
+
+#[derive(Default)]
+struct ToolCallingModel {
+    requests: Vec<Value>,
+    unselected: bool,
+}
+
+impl ModelProvider for ToolCallingModel {
+    fn generate(&mut self, request: &Value) -> Result<Value> {
+        self.requests.push(request.clone());
+        let mut event = json!({
+            "generation_id": request["generation_id"], "model_id": request["model"]["model_id"],
+            "source": request["model"]["source"], "messages": request["messages"],
+            "response": [], "output_token_count": 1, "finish_reason": "tool_calls", "duration_ms": 1,
+        });
+        if self.requests.len() == 1 {
+            let tool = &request["tools"][0];
+            event["tool_calls"] = json!([{
+                "tool_call_id": "model-call-1", "generation_id": request["generation_id"],
+                "name": if self.unselected { json!("unselected") } else { tool["name"].clone() },
+                "implementation": tool["implementation"],
+                "arguments": {"schema_ref": "uenv://schemas/vnext/EmptyConfig", "data": {}},
+                "timeout_ms": 1000,
+            }]);
+        } else {
+            event["response"] = json!([{"kind": "text", "text": "done"}]);
+            event["finish_reason"] = json!("stop");
+        }
+        Ok(event)
+    }
+}
+
+struct ToolLoopAgent;
+impl AgentHost for ToolLoopAgent {
+    fn prepare(&mut self, _: &Value, tools: &[Value], _: u64) -> Result<Vec<Value>> {
+        Ok(tools.to_vec())
+    }
+    fn run_agent(
+        &mut self,
+        _: &Value,
+        observation: &Value,
+        runtime: &mut AgentRuntime<'_>,
+        _: u64,
+    ) -> Result<Value> {
+        let mut messages = json!([{"role": "user", "content": observation["content"]}]);
+        let first = runtime.generate(&messages)?;
+        let result = runtime.call_tool(&first["tool_calls"][0])?;
+        messages.as_array_mut().unwrap().extend([
+            json!({"role": "assistant", "content": first["response"], "tool_calls": first["tool_calls"]}),
+            json!({"role": "tool", "content": result["content"], "tool_call_id": result["tool_call_id"]}),
+        ]);
+        match runtime.generate(&messages) {
+            Ok(second) => Ok(
+                json!({"final_answer": second["response"], "artifacts": [], "termination_reason": "final_answer"}),
+            ),
+            Err(error) if error.code == "GENERATION_LIMIT" => Ok(
+                json!({"final_answer": [], "artifacts": [], "termination_reason": "budget_exhausted"}),
+            ),
+            Err(error) => Err(error),
+        }
+    }
+    fn close(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn multigeneration_tools_use_one_worker_budget_and_selected_bindings() {
+    let schema = ContractSchema::bundled();
+    for (cap, unselected) in [(1, false), (2, false), (2, true)] {
+        let mut plan = plan_with_test_tool();
+        plan["limits"]["max_generations"] = json!(cap);
+        let plan = seal_plan(&plan).unwrap();
+        let clock = FixedClock(Cell::new(1_800_000_000_100));
+        let supervisor = EpisodeSupervisor::new(&schema, &clock, capabilities(&plan));
+        let mut agent = ToolLoopAgent;
+        let mut environment = EnvironmentProbe::default();
+        let mut scorer = ScorerProbe::default();
+        let mut backend = BackendProbe::default();
+        let mut tools = ToolHostProbe::default();
+        let mut model = ToolCallingModel {
+            unselected,
+            ..Default::default()
+        };
+        let mut artifacts = MemoryArtifactStore::default();
+        let result = supervisor
+            .execute(
+                &dispatch(&plan),
+                &mut agent,
+                &mut environment,
+                Some(&mut scorer),
+                &mut backend,
+                &mut tools,
+                &mut model,
+                &mut artifacts,
+            )
+            .unwrap();
+        assert_eq!(model.requests[0]["tools"], plan["tools"]);
+        if unselected {
+            assert_eq!(result["execution_status"], "failed");
+            assert_eq!(result["error"]["code"], "TOOL_NOT_SELECTED");
+            assert_eq!(result["usage"]["tool_call_count"], 0);
+            assert_eq!(scorer.calls, 0);
+        } else {
+            assert_eq!(result["execution_status"], "completed");
+            assert_eq!(model.requests.len(), cap as usize);
+            assert_eq!(result["usage"]["generation_count"], cap);
+            assert_eq!(result["usage"]["tool_call_count"], 1);
+            assert_eq!(
+                result["outcome"]["termination_reason"],
+                if cap == 1 {
+                    "budget_exhausted"
+                } else {
+                    "final_answer"
+                }
+            );
+            assert_eq!(scorer.calls, 1);
+            if cap == 2 {
+                assert_eq!(
+                    model.requests[1]["messages"][2]["tool_call_id"],
+                    "model-call-1"
+                );
+            }
+        }
+        assert!(backend.closed && environment.closed && tools.closed);
+    }
+}

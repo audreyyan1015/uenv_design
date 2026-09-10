@@ -176,7 +176,7 @@ Backend.open、各 Host.prepare、AgentHost.run_agent、ToolHost/Backend.freeze�
 | 执行控制 | Rust Supervisor/AgentRuntime 通过 mock 端口验证顺序、预算和计数 | 待实施：受管进程、IPC、真正的强制取消与完整边界校验 | 使用真实组件进程验证结束、超时、取消和迟到调用 |
 | 调度与恢复 | 数据结构和部分形状、摘要检查 | 待实施：真实 lease/replay 校验、持久事务、spool/outbox 和重启恢复 | 断连、进程退出、重复派发和迟到结果故障测试 |
 | Backend 与私有评分 | 镜像优先级和回调协议；模拟 freeze/close | 待验证：Process/Docker/Podman 驱动、固定隔离底线、候选只读视图和真实镜像兼容性 | 按后端验证工作区、访问控制、评分依赖与清理 |
-| Agent 与工具 | 公共接口、接口匹配和工具表核验；PlainAgent 示例仅无工具单轮 | 待实施：Python 函数包装、MCP 生命周期、OpenHands 原生工具及有状态行为接入 | 对同一工具验证直接接口与 MCP 的真实状态、结果和事件 |
+| Agent 与工具 | 公共接口、接口匹配和工具表核验；PlainAgent 已有多轮工具循环、历史策略和预算耗尽收尾 | 待实施：Python 函数包装、MCP 生命周期、OpenHands 原生工具及有状态行为接入 | 对同一工具验证直接接口与 MCP 的真实状态、结果和事件 |
 | Hub 数据服务 | 包声明加载、schema 和模拟文件引用 | 待决策：数据发布/样本选择/文件授权 API 的完整请求结构；待实施：索引、缓存和保留期 | 同一条样本分别由本地与 Hub 准备，比较请求与结果；测试冲突、缺失和权限 |
 | 动态工具 | 固定工具表协议 | 当前不支持；待决策：授权来源、发现过程及工具表版本协议 | 明确协议前拒绝运行中增加工具 |
 | 通用性 | 九个合成数据集包及有状态接口示例 | 待验证：真实多轮、多模态、无参考答案、代码 harness 与 OpenHands 全链路 | 保留真实 Agent、工具、环境，仅替换模型端点做模拟 |
@@ -326,7 +326,7 @@ sequenceDiagram
 
 AgentContext 不是另一个调度服务。它在 Python 中向 Agent 提供 task、observation、step、generate 和工具入口；调用必须进入 Rust `AgentRuntime`，由它在副作用发生前检查取消、截止时间和对应预算。Python 只把框架调用转换成协议，不能直连模型后再补报、不能自行增加次数、延长截止时间或封存轨迹。本地 Rust 参考把受控调用集中在 [AgentRuntime](../../reference-control/src/runtime.rs)。open、prepare、Agent.run、freeze 以及每次模型/工具/环境/评分调用都接收同一预算派生的当前 remaining_ms。清理固定为 ScorerHost → AgentHost → ToolHost → EnvironmentHost → Backend，仅关闭已创建的资源；无评分时没有 ScorerHost；`freeze()`、`close()` 都必须幂等，某一步失败也继续尝试后续步骤。close 使用平台固定的清理超时，不能因 episode 预算已耗尽而跳过。
 
-单轮问答仍调用同一个 Agent.run，只生成一次回答，可以不调用 step。多轮策略由 AgentRunner 决定，Rust Worker 强制公共预算；Supervisor 不再套一层模型决策循环。多轮中的公开反馈来自 Environment.step 的 Observation 或工具结果；这些内容会写入轨迹，但配置了 scorer 才在最终 Outcome 冻结后产生至多一次正式 ScoreResult。
+PlainAgent.run 是一个多轮循环。当前 PlainAgent 示例用 limits.max_generations=1 限制首次配置；提高上限允许工具反馈驱动后续生成，模型给出最终回答时提前停止。单轮问答仍调用同一个 Agent.run，可以不调用 step。多轮策略由 AgentRunner 决定，Rust Worker 强制公共预算；Supervisor 不再套一层模型决策循环。多轮中的公开反馈来自 Environment.step 的 Observation 或工具结果；这些内容会写入轨迹，但配置了 scorer 才在最终 Outcome 冻结后产生至多一次正式 ScoreResult。
 
 ### 9.3 工具路由与资源端口
 
@@ -373,3 +373,7 @@ classDiagram
 工具不是 Agent 的父类，Backend 也不是 Environment 的父类。它们通过受控接口组合：Agent 决定调用，工具完成操作，后端提供资源能力。ProcessBackend、DockerBackend、PodmanBackend 在 Worker 侧实现统一后端协议；这不意味着 Python ABC 的继承关系可以直接跨语言执行。ToolHost 返回“能否路由”，AgentHost 返回“模型能否看见”；Supervisor 把两者分别与唯一 `ExecutionPlan.tools` 核对，返回值不成为第二份工具配置。
 
 状态环境的动作工具可以调用 AgentContext.step；文件工具通过 session 操作文件。一次动作只执行一次，不能先由文件工具修改，再让 Environment.step 重复修改。只操作 SDK 会话状态的原生工具无需经过任务 Backend，但仍遵守工具选择、平台安全底线、计数和记录。工具使用规则见[主设计第 6.4 节](../uenv_design.md#64-工具定义接入与调用)。
+
+PlainAgent 的 Python 循环已通过异步 Context 测试：多次生成、工具反馈、两种历史策略、提前结束、预算耗尽和错误传播。AgentRuntimeError 只是已有 ErrorRecord 的 SDK 异常表示，不增加传输对象；真实 IPC Context 需将 Worker 的错误原样转换为它。Rust 端独立验证多次生成经过同一预算、工具绑定及轨迹入口；两侧测试不等于真实 Python/Rust IPC 已接通。
+
+GenerationEvent.tool_calls 和 assistant Message.tool_calls 复用既有 ToolCall 字段；它们表示模型请求，实际执行仍由独立 tool_call/tool_result 事件证明。ModelProvider 接收 ExecutionPlan.tools 的受控副本，按已登记版本加载模型可用的工具描述和 schema，不接受另一张工具选择表。模型接口映射时不发送 implementation、generation_id、timeout_ms 等控制字段；原生输出、tokens/logprobs 保持可追溯，真实模型和框架适配仍需验收。

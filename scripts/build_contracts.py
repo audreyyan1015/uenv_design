@@ -64,16 +64,23 @@ obj("ContentPart", "消息内容段；文本与外部产物二选一，由 kind 
 D["ContentPart"]["oneOf"] = [
     {"properties": {"kind": {"const": "text"}}, "required": ["text"], "not": {"required": ["artifact"]}},
     {"properties": {"kind": {"const": "artifact"}}, "required": ["artifact"], "not": {"required": ["text"]}}]
-obj("Message", "模型可见消息；工具调用详情通过 ToolCall 单独记录", {
+obj("Message", "规范模型消息；assistant 可包含已归一化的工具请求，实际执行另记事件", {
     "role": enum("消息来源", "system", "user", "assistant", "tool"),
     "content": array(ref("ContentPart"), "有序内容段"),
-    "tool_call_id": ID}, ("tool_call_id",))
+    "tool_call_id": ID,
+    "tool_calls": array(ref("ToolCall"), "assistant 请求工具；复用统一结构，模型 API 只映射调用身份、名字和参数")}, ("tool_call_id", "tool_calls"))
+D["Message"]["properties"]["tool_calls"]["minItems"] = 1
+D["Message"]["allOf"] = [
+    {"if": {"required": ["tool_calls"]}, "then": {"properties": {"role": {"const": "assistant"}}}},
+    {"if": {"properties": {"role": {"const": "tool"}}}, "then": {"required": ["tool_call_id"]},
+     "else": {"not": {"required": ["tool_call_id"]}}},
+]
 
 # Built-in component schemas are reference catalog inputs. Dataset-owned
 # business schemas are generated from each package's models.py by build_examples.py.
 obj("EmptyConfig", "无额外参数", {})
 obj("PlainAgentConfig", "轻量智能体配置", {
-    "history_policy": enum("模型上下文策略", "full", "last_generation"),
+    "history_policy": enum("full 保留完整历史；last_generation 保留系统提示、初始任务和最近一次完整模型及工具交互", "full", "last_generation"),
     "system_prompt": string("智能体系统提示词；空表示不额外添加")})
 obj("OpenHandsAgentConfig", "OpenHands adapter 的明确可调参数", {
     "system_prompt": string("用户附加的系统提示")})
@@ -300,19 +307,26 @@ obj("GenerationEvent", "一次模型调用的原始记录；逐调用保留版�
     "parameter_version": integer("实际参数版本序号"), "tokenizer": ref("ResolvedComponent"),
     "source": enum("真实或模拟", "real", "simulated"),
     "messages": array(ref("Message"), "该次真实输入消息"),
-    "response": array(ref("ContentPart"), "该次原始输出"),
+    "response": array(ref("ContentPart"), "该次原始内容输出；结构化工具请求在 tool_calls 中保留"),
+    "tool_calls": array(ref("ToolCall"), "本次模型请求的工具列表；身份和参数源自模型，implementation、generation_id、timeout_ms 由受控模型适配绑定；实际获准执行另写 tool_call 事件"),
     "output_token_count": integer("本次实际生成 token 数；预算统计的唯一来源"),
     "input_token_ids": array(integer("token ID"), "真实输入 token 序列"),
     "output_token_ids": array(integer("token ID"), "真实生成 token 序列；存在时长度必须等于 output_token_count"),
     "output_logprobs": array(number("token 对数概率"), "长度必须等于 output_token_ids"),
     "loss_mask": array({"type": "integer", "enum": [0, 1], "description": "是否参与训练损失"}, "与生成 token 一一对应"),
     "finish_reason": enum("模型停止原因", "stop", "tool_calls", "length", "cancelled", "error"),
-    "duration_ms": integer("模型调用耗时")}, ("policy_version", "parameter_version", "tokenizer", "input_token_ids", "output_token_ids", "output_logprobs", "loss_mask"))
+    "duration_ms": integer("模型调用耗时")}, ("policy_version", "parameter_version", "tokenizer", "input_token_ids", "output_token_ids", "output_logprobs", "loss_mask", "tool_calls"))
+D["GenerationEvent"]["properties"]["tool_calls"]["minItems"] = 1
+D["GenerationEvent"]["allOf"] = [{
+    "if": {"properties": {"finish_reason": {"const": "tool_calls"}}},
+    "then": {"required": ["tool_calls"]},
+    "else": {"not": {"required": ["tool_calls"]}},
+}]
 D["GenerationEvent"]["dependentRequired"] = {
     "output_logprobs": ["output_token_ids"],
     "loss_mask": ["output_token_ids"],
 }
-obj("ToolCall", "规范工具调用；动态 arguments 使用工具声明的 schema 递归验证", {
+obj("ToolCall", "规范工具调用；模型请求与实际执行复用字段，阶段由所属消息或事件确定；动态 arguments 按工具 schema 验证", {
     "tool_call_id": ID, "generation_id": ID, "implementation": ref("ResolvedComponent"),
     "name": string("ExecutionPlan.tools 中的唯一工具名；implementation 必须与该项一致"),
     "arguments": ref("TypedConfig"), "timeout_ms": integer("允许执行时间", 1)})

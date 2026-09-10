@@ -468,6 +468,7 @@ impl<'a> AgentRuntime<'a> {
             "generation_id": generation_id,
             "model": model,
             "messages": messages,
+            "tools": self.tools,
             "seed": self.seed,
             "remaining_timeout_ms": remaining_timeout_ms,
         });
@@ -522,6 +523,36 @@ impl<'a> AgentRuntime<'a> {
     }
 
     fn validate_generation_trace(&self, event: &Value) -> Result<u64> {
+        // Proposed calls are not executed here. The same bindings are checked
+        // again when Agent requests the side effect through call_tool.
+        let proposed = optional_array(event, "tool_calls")?;
+        let requests_tools =
+            event.get("finish_reason").and_then(Value::as_str) == Some("tool_calls");
+        if requests_tools != proposed.is_some() || proposed.is_some_and(Vec::is_empty) {
+            return Err(ControlError::new("MODEL_TOOL_CALLS_MISMATCH"));
+        }
+        let mut proposed_ids = BTreeSet::new();
+        for call in proposed.into_iter().flatten() {
+            self.schema.validate_shape("ToolCall", call)?;
+            let id = string(call, "tool_call_id")?;
+            if !proposed_ids.insert(id) || self.tool_call_ids.contains(id) {
+                return Err(ControlError::new("DUPLICATE_TOOL_CALL_ID"));
+            }
+            if call.get("generation_id") != event.get("generation_id") {
+                return Err(ControlError::new("MODEL_TOOL_GENERATION_MISMATCH"));
+            }
+            let binding = self
+                .tools
+                .iter()
+                .find(|binding| binding.get("name") == call.get("name"))
+                .ok_or_else(|| ControlError::new("TOOL_NOT_SELECTED"))?;
+            if call.get("implementation") != binding.get("implementation") {
+                return Err(ControlError::new("TOOL_CALL_BINDING_MISMATCH"));
+            }
+            if u64_field(call, "timeout_ms")? == 0 {
+                return Err(ControlError::new("INVALID_TOOL_TIMEOUT"));
+            }
+        }
         let output_token_count = u64_field(event, "output_token_count")?;
         let output_token_ids = optional_array(event, "output_token_ids")?;
         if output_token_ids.is_some_and(|values| values.len() as u64 != output_token_count) {

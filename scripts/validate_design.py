@@ -24,7 +24,7 @@ for package_source in sorted((ROOT / "reference/datasets").glob("*/src")):
 
 from jsonschema import Draft202012Validator, ValidationError
 from package_loader import build_manifest, discover_packages, expand_run, load_package, load_yaml, validate_author_package
-from uenv.sdk import AgentContext, DatasetAdapter, Environment, EnvironmentContext, Outcome, ScoreInput, ScoreResult, Scorer, ScoringContext, ToolExecutor, UEnvModel, model_from_envelope, model_json_schema, task_from_wire, text_part, to_wire
+from uenv.sdk import AgentRuntimeError, Observation, AgentContext, DatasetAdapter, Environment, EnvironmentContext, Outcome, ScoreInput, ScoreResult, Scorer, ScoringContext, ToolExecutor, UEnvModel, model_from_envelope, model_json_schema, task_from_wire, text_part, to_wire
 from uenv.sdk.schema_registry import SchemaRegistry, canonical_bytes
 from gsm8k.scorer import Gsm8kScorer
 from olymmath.scorer import OlymmathScorer
@@ -723,6 +723,137 @@ class ContractTests(unittest.TestCase):
         unaligned_detail["output_logprobs"] = [-0.1]
         with self.assertRaises(ValidationError):
             validate("GenerationEvent", unaligned_detail)
+
+    def test_structured_tool_requests_have_one_shape_and_match_message_role(self):
+        call = {
+            "tool_call_id": "c1", "generation_id": "g1", "name": "lookup",
+            "implementation": {"id": "tools/lookup", "version": "1", "digest": "sha256:" + "0" * 64},
+            "arguments": {"schema_ref": "uenv://schemas/vnext/EmptyConfig", "data": {}},
+            "timeout_ms": 1000,
+        }
+        event = {"generation_id": "g1", "model_id": "test", "source": "simulated",
+                 "messages": [], "response": [], "tool_calls": [call],
+                 "finish_reason": "tool_calls", "output_token_count": 1, "duration_ms": 0}
+        validate("GenerationEvent", event)
+        for replacement in (None, []):
+            invalid = copy.deepcopy(event)
+            if replacement is None:
+                invalid.pop("tool_calls")
+            else:
+                invalid["tool_calls"] = replacement
+            with self.assertRaises(ValidationError):
+                validate("GenerationEvent", invalid)
+        event["finish_reason"] = "stop"
+        with self.assertRaises(ValidationError):
+            validate("GenerationEvent", event)
+        message = {"role": "assistant", "content": [], "tool_calls": [call]}
+        validate("Message", message)
+        message["role"] = "user"
+        with self.assertRaises(ValidationError):
+            validate("Message", message)
+        with self.assertRaises(ValidationError):
+            validate("Message", {"role": "tool", "content": []})
+
+
+class PlainAgentContextProbe(AgentContext):
+    """Deterministic SDK-side probe; Rust tests independently check real budgets."""
+    def __init__(self, finishes, max_generations=10, tool_error=False, denied=None):
+        self.observation = Observation([text_part("Task")])
+        self.tools = ()
+        self.finishes = finishes
+        self.max_generations = max_generations
+        self.tool_error = tool_error
+        self.denied = denied
+        self.requests = []
+        self.calls = []
+
+    async def generate(self, messages):
+        if self.denied:
+            raise AgentRuntimeError({"code": self.denied})
+        if len(self.requests) >= self.max_generations:
+            raise AgentRuntimeError({"code": "GENERATION_LIMIT"})
+        validate("Message", messages[-1])
+        self.requests.append(copy.deepcopy(messages))
+        index = len(self.requests)
+        reason = self.finishes[index - 1]
+        event = {
+            "generation_id": f"g{index}", "model_id": "test", "source": "simulated",
+            "messages": copy.deepcopy(messages), "response": [text_part(f"response{index}")],
+            "finish_reason": reason, "output_token_count": 1, "duration_ms": 0,
+        }
+        if reason == "tool_calls":
+            event["tool_calls"] = [{
+                "tool_call_id": f"call{index}", "generation_id": f"g{index}", "name": "lookup",
+                "implementation": {"id": "tools/lookup", "version": "1", "digest": "sha256:" + "0" * 64},
+                "arguments": {"schema_ref": "uenv://schemas/vnext/EmptyConfig", "data": {}},
+                "timeout_ms": 1000,
+            }]
+        validate("GenerationEvent", event)
+        return event
+
+    async def call_tool(self, call):
+        self.calls.append(copy.deepcopy(call))
+        result = {"tool_call_id": call["tool_call_id"], "status": "ok",
+                  "content": [text_part("tool output")], "output_truncated": False}
+        if self.tool_error:
+            result.update(status="error", error={"code": "LOOKUP_FAILED", "phase": "tool",
+                "message": "lookup failed", "retryable": False})
+        validate("ToolResult", result)
+        return result
+
+    async def step(self, action):
+        raise AssertionError("PlainAgent must not invent environment actions")
+
+
+class PlainAgentTests(unittest.IsolatedAsyncioTestCase):
+    def agent(self, history="full"):
+        from extension_templates import PlainAgent
+        return PlainAgent({"history_policy": history, "system_prompt": "System"})
+
+    async def test_tool_feedback_drives_multiple_generations_with_complete_history(self):
+        context = PlainAgentContextProbe(["tool_calls", "tool_calls", "stop"])
+        result = await self.agent().run(context)
+        self.assertEqual(result.text, "response3")
+        self.assertEqual(result.termination_reason, "final_answer")
+        self.assertEqual(len(context.requests), 3)
+        self.assertEqual(len(context.calls), 2)
+        self.assertEqual([len(messages) for messages in context.requests], [2, 4, 6])
+        self.assertEqual(context.requests[1][-1]["tool_call_id"], "call1")
+        self.assertEqual(context.requests[2][-1]["tool_call_id"], "call2")
+        self.assertEqual(context.requests[1][-2]["tool_calls"], [context.calls[0]])
+
+    async def test_last_generation_keeps_initial_task_and_complete_latest_exchange(self):
+        context = PlainAgentContextProbe(["tool_calls", "tool_calls", "stop"])
+        await self.agent("last_generation").run(context)
+        self.assertEqual([len(messages) for messages in context.requests], [2, 4, 4])
+        self.assertEqual(context.requests[2][:2], context.requests[0])
+        self.assertNotIn("call1", json.dumps(context.requests[2]))
+        self.assertEqual(context.requests[2][-2]["tool_calls"][0]["tool_call_id"], "call2")
+
+    async def test_run_budget_one_remains_one_and_terminal_answer_stops_early(self):
+        cap = load_yaml(ROOT / "reference/runs/gsm8k.yaml")["limits"]["max_generations"]
+        self.assertEqual(cap, 1)
+        context = PlainAgentContextProbe(["tool_calls"], max_generations=cap)
+        result = await self.agent().run(context)
+        self.assertEqual(result.termination_reason, "budget_exhausted")
+        self.assertEqual(len(context.requests), 1)
+        self.assertEqual(len(context.calls), 1)
+        early = PlainAgentContextProbe(["stop"], max_generations=10)
+        self.assertEqual((await self.agent().run(early)).termination_reason, "final_answer")
+        self.assertEqual(len(early.requests), 1)
+
+    async def test_tool_error_is_feedback_but_runtime_failure_is_not_a_budget_end(self):
+        context = PlainAgentContextProbe(["tool_calls", "stop"], tool_error=True)
+        result = await self.agent().run(context)
+        self.assertEqual(result.text, "response2")
+        self.assertIn("LOOKUP_FAILED", json.dumps(context.requests[1][-1]))
+        for code in ("EPISODE_CANCELLED", "MODEL_NETWORK_FAILED", "TOOL_NOT_SELECTED"):
+            with self.subTest(code=code), self.assertRaises(AgentRuntimeError):
+                await self.agent().run(PlainAgentContextProbe([], denied=code))
+        partial = PlainAgentContextProbe(["length"])
+        outcome = await self.agent().run(partial)
+        self.assertEqual(outcome.text, "response1")
+        self.assertEqual(outcome.termination_reason, "budget_exhausted")
 
 
 class PythonScorerTests(unittest.TestCase):

@@ -6,7 +6,7 @@
   "properties": {
     "history_policy": {
       "type": "string",
-      "description": "模型上下文策略",
+      "description": "full 保留完整历史；last_generation 保留系统提示、初始任务和最近一次完整模型及工具交互",
       "enum": [
         "full",
         "last_generation"

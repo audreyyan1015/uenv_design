@@ -270,7 +270,7 @@ flowchart TB
   TRAIN --> OUTPUT[VerlAdapter.to_framework_output<br/>交给 Trainer]
 ```
 
-图中是任务提交与结果返回。训练时模型调用的完整路径是 `Agent → Worker AgentRuntime/ModelProvider → ModelGateway → Trainer 推理服务`；评测和轨迹采集也由同一个 Worker ModelProvider 连接所配置的模型端点。Bridge 的提交函数不生成回答；同步或异步只改变等待、消费结果的方式。
+图中是任务提交与结果返回。训练时模型调用的完整路径是 `Agent → Worker AgentRuntime → ModelProvider → ModelGateway → Trainer 推理服务`；评测和轨迹采集也由同一个 Worker ModelProvider 连接所配置的模型端点。Bridge 的提交函数不生成回答；同步或异步只改变等待、消费结果的方式。
 
 build_episode_request 接收标准公开 TaskSpec、种子及可选 private_data，生成成员 request_id/episode_id。build_batch_request 将一份完整 RunSpec 放入 run_spec，将这些成员放入 episodes；整批只生成一个 batch_id，各成员复用它并用从 0 开始的 sample_index 定位。EpisodeRequest 没有 run_id 或配置覆盖字段，ExecutionPlan.run_id 从批次 RunSpec 派生。BatchReceipt 返回 batch_id 及已接纳的 episode_ids。原始字段转换仅发生在准备阶段，不在请求构建中判断数据集或猜测字段。
 
@@ -371,7 +371,7 @@ flowchart TB
 10. Rust `EpisodeScope.finish()` 固定按 ScorerHost → AgentHost → ToolHost → EnvironmentHost → Backend 完成首次关闭；各端口 close 必须幂等，一步失败仍继续关闭后续资源。异常或取消触发同一路径。清理失败写入 cleanup 错误并进入有限重试队列，不把不干净实例放回复用池。
 11. Rust 写 terminal 并调用 `TrajectoryWriter.seal()`；writer 一旦发现事件或 checkpoint 写入失败，就自动形成 final_partial，否则形成 final_complete。随后目标 Worker 把 EpisodeResult 写入 durable outbox，由 `ResultReporter.report()` 重传直到 Server ACK。后续清理重试不修改已形成的 score、manifest 或 EpisodeResult.cleanup_status。
 
-通用 Agent 实现维护 messages 和显式上下文策略。OpenHandsAdapter 调用 SDK Conversation.run 并转换其事件；不在 Worker 再套一次 generation 循环。SDK 自己的 iteration 计数仅作为额外限制，统一模型/工具预算由 Rust AgentRuntime 在实际调用前强制执行。
+PlainAgent 实现通用多轮循环并维护 messages：模型请求工具时，执行后把工具结果反馈给下一次生成；模型给出最终回答时结束。当前 PlainAgent 公共运行示例把 limits.max_generations 初始设为 1，用户可提高这一唯一上限；不增加 agent.config.max_rounds，也不在 Worker 再维护模型决策循环。无工具的直接回答会提前结束，不重复生成以凑满上限。full 保留全部历史，last_generation 保留系统提示、初始任务及最近一次完整模型/工具交互。OpenHandsAdapter 调用 SDK Conversation.run 并转换其事件；不在 Worker 再套一次 generation 循环。SDK 自己的 iteration 计数仅作为额外限制，统一模型/工具预算由 Rust AgentRuntime 在实际调用前强制执行。
 
 ### 4.6 三种循环与 SWE 对照
 
@@ -668,7 +668,7 @@ flowchart LR
 
 所有入口执行相同的平台安全底线、预算、超时和取消规则；Rust ToolGateway 根据 ExecutionPlan.tools 做权威检查。操作文件或命令时使用当前任务的 Backend 会话，操作环境状态时调用当前 Environment，外部服务通过受管的专用连接访问。Python SDK/MCP 适配层只负责格式转换，不能增加工具或重置预算。只操作 Agent 会话状态的工具可以留在 Agent 进程，但仍需向 Rust Worker 登记调用和结果。选择一个工具只表示允许调用该工具接口，不会给 Agent 开放宿主目录或私有评分材料。`internet_access` 只控制任务 Backend session 的通用公网；`external_service` 工具的已选连接只开放该特定服务，不给 session 打开公网，也不产生第二个 internet_access。
 
-UEnv 管理 MCP 连接及其生命周期，只开放获准工具，不要求用户重复填写自动启动的服务地址。每次调用只计数一次，用 ToolCall/ToolResult 记录参数、结果或错误，并关联实际模型调用；超时和取消也要记录，崩溃导致缺失时标明轨迹不完整。工具格式转换不改写真实模型消息和训练 token。
+UEnv 管理 MCP 连接及其生命周期，只开放获准工具，不要求用户重复填写自动启动的服务地址。每次调用只计数一次，用 ToolCall/ToolResult 记录参数、结果或错误，并关联实际模型调用；超时和取消也要记录，崩溃导致缺失时标明轨迹不完整。工具格式转换不伪造原始模型文本或训练 token；工具调用的 token/logprob 也必须来自实际模型响应，不能从归一化 JSON 重新生成。
 
 ### 6.5 通用性与支持边界
 
@@ -905,7 +905,7 @@ Scorer 只处理一条 episode。系统查询层从已保存的结果计算完�
 |---|---|---|
 | `state` | `StateEvent` | payload.phase 保存 preparing、running、scoring、finalizing、cleaning 等生命周期阶段；Outcome.state 只表示环境状态 |
 | `observation` | `Observation` | Environment.reset 的初始观测，或不属于某次 Transition 的独立公开观测；step 后观测只在 transition 中保存 |
-| `generation` | `GenerationEvent` | 一次真实模型调用的 messages、响应和实际 model_id；端点提供的版本、token、logprob、loss mask 原样保存，禁止重新 tokenize 冒充 |
+| `generation` | `GenerationEvent` | 一次真实模型调用的 messages、response、可选 tool_calls 和实际 model_id；端点提供的版本、token、logprob、loss mask 原样保存，禁止重新 tokenize 冒充 |
 | `tool_call` | `ToolCall` | 实际获准执行的工具名、实现、参数、超时以及关联的 `generation_id` |
 | `tool_result` | `ToolResult` | 与 `tool_call_id` 配对的成功、失败、超时、取消和返回内容 |
 | `environment_transition` | `EnvironmentTransition` | 动作前观测、动作和同一个 `Transition` 返回值 |
@@ -915,7 +915,7 @@ Scorer 只处理一条 episode。系统查询层从已保存的结果计算完�
 
 `kind` 和 `payload` 必须匹配，不能把同一件事换一个字段名塞入 `extra`。PlainAgent、OpenHands 或以后接入的 Agent 的适配器只提供原生事件内容，由 Rust 入口生成上述事件；无法标准化但需要保留的原始响应使用 `ArtifactRef`，不能新增另一套顶层轨迹结构。
 
-模型提出调用工具与工具实际执行是两个事实。`generation` 保存模型原始输出，`tool_call`/`tool_result` 保存受管执行；通过 `generation_id` 和 `tool_call_id` 关联，不用相同字段表达两个阶段。Environment 的动作结果只在 `Transition` 中定义一次，`EnvironmentTransition.transition` 保存其独立副本。
+模型提出调用工具与工具实际执行是两个事实。GenerationEvent.tool_calls 与后续 assistant Message.tool_calls 使用同一 ToolCall 结构保存归一化请求，finish_reason=tool_calls 时列表非空。ModelProvider 从选定工具表取得描述与输入 schema，并将模型原生调用 ID、工具名及参数映射回来；implementation、generation_id、timeout_ms 根据受控绑定填写，模型不得自行选择组件或预算。Worker 在返回 Agent 前核验绑定、调用身份与 finish_reason。调用模型 API 时只映射工具调用身份、名字和参数，不把组件引用或控制预算拼进提示词。`generation` 保存模型原始内容及结构化工具请求，`tool_call`/`tool_result` 保存受管执行；通过 `generation_id` 和 `tool_call_id` 关联，不用相同字段表达两个阶段。Environment 的动作结果只在 `Transition` 中定义一次，`EnvironmentTransition.transition` 保存其独立副本。
 
 目标 EnvironmentTransition 是 AgentRuntime 内部生成的轨迹内容，字段如下；它不增加用户需要构造的第四个返回类。
 

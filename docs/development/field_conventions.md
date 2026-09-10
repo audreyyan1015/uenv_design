@@ -189,3 +189,7 @@ EpisodeResult.score 只在实际评分后存在，不能用空对象、null 或�
 limits.finalize_reserve_ms 由用户填写，Rust BudgetEnforcer 从总预算扣出交互截止时间，保留给结果收集、冻结及可选评分；不增加另一份评分时间配置。不评分同样需要收尾。清理和上报继续遵循主方案的可恢复规则，不因评分跳过而省略。
 
 轨迹采集沿用 TrajectoryEvent/TrajectoryManifest/trajectory_ref；无 score 事件不表示轨迹缺失。未评分没有 scoring_checkpoint，最终按事实完整性封存为 final_complete/final_partial。默认导出权威 attempt，历史尝试显式选择；派生筛选文件不修改原始轨迹，不自动发布为 Hub 数据版本。
+
+PlainAgent 的轮数统一使用 limits.max_generations（模型生成次数上限），不引入 agent.config.max_rounds/max_steps 等别名。循环由 Agent 实现，Worker 仍是唯一预算执行者；模型已给最终回答时允许提前结束。history_policy 只影响下一次模型输入，不影响轨迹保留。
+
+Message.tool_calls 与 GenerationEvent.tool_calls 复用 ToolCall，前者只允许在 assistant 消息中出现；finish_reason=tool_calls 时后者必须非空，其余停止原因不携带该字段。归一化请求不是执行凭据，只有 Worker 接纳的 tool_call/tool_result 事件表示实际执行。Message.role=tool 必须填写已有 tool_call_id；不为反馈另造关联身份。工具实现与预算只能从既有 ExecutionPlan.tools 绑定，模型不能填写控制配置。

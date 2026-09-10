@@ -2,6 +2,15 @@
 
 验证日期：2026-09-10。验证对象仅为 `architecture-review-0905/design`。
 
+## PlainAgent 多轮复验（2026-09-10）
+
+- PlainAgent.run 改为生成、工具执行与反馈循环；最终回答提前结束。full 保留全部历史，last_generation 保留系统提示、初始任务和最近完整模型/工具交互。两种策略不改变原轨迹。
+- 所有 PlainAgent 公共运行示例初始使用 limits.max_generations=1；DSCodeBench 从 30 改为 1 并同步生成计划。该字段仍为唯一模型调用上限，不增加 Agent 自有轮数配置；用户提高上限后允许工具反馈驱动多次生成。
+- GenerationEvent.tool_calls 与 assistant Message.tool_calls 复用现有 ToolCall 结构，不新增工具请求根类型。受控 ModelProvider 绑定模型请求与已选工具，Rust 校验生成身份、工具绑定和重复调用身份；真正执行仍由 call_tool 的预算/权限入口接纳并记录事件。
+- AgentRuntimeError 是已有 ErrorRecord 的 SDK 异常包装，不增加传输类型。PlainAgent 只把预算拒绝转为 budget_exhausted；取消、模型故障和权限错误保持错误语义。
+- 40 项验证通过，其中包含 Rust 测试入口；Rust 共 25 项测试（3 项单元、6 项计划、16 项执行控制）。新增测试覆盖多次生成、工具反馈、完整/最近历史、提前停止、上限 1、长度耗尽、错误传播、结构化工具消息约束，以及 Rust 拒绝未选择工具。
+- cargo fmt、clippy --offline --locked --all-targets -- -D warnings 和 diff 空白检查通过。验证只覆盖本地 Python Context 与 Rust 端口，真实跨进程 SDK、模型 API/MCP/OpenHands 接入仍需按重构计划完成。生产源码未改。
+
 ## 轨迹采集与可选评分复验（2026-09-10）
 
 - RunSpec 新增 trajectory_collection；scorer 在评测/训练必填，在轨迹采集可省略。training 仍仅用于在线训练接入。没有新增提交协议、执行器或轨迹根类型。
