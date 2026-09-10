@@ -87,7 +87,7 @@ required_capabilities: []
 
 Python 库依赖只在 `pyproject.toml` 声明，由 Python 包管理器安装；数据集声明、PackageManifest 和 ExecutionPlan 不再维护额外的 UEnv 组件依赖列表。运行组件通过既有角色字段、工具适配器字段和 harness 字段明确指定，并在这些位置锁定版本。
 
-空数组表示没有对应需求，不触发额外操作。镜像 `runtime.image` 等按需字段不塞入基础示例；添加时必须从公共契约引用完整类型，并按同样四列展开子字段。镜像选择和消费规则见主方案第 6.1—6.5 节。
+空数组表示没有对应需求，不触发额外操作。镜像 `runtime.image` 等按需字段不塞入基础示例；添加时必须从公共契约引用完整类型，并按同样四列展开子字段。镜像选择和消费规则见主方案第 6.2—6.6 节。
 
 本地参考已实现类导入、模型/schema 绑定和 Rust 组件版本核验；完整 Hub 发布、Worker 动态 host 加载、调度及真实网络控制仍属待实现或待集成范围。验收必须检查实际消费路径，不能只检查字段通过 schema 校验。
 
@@ -266,7 +266,7 @@ Environment.step 是否需要覆盖取决于交互规则；公共接口的存在
 - 类型只定义一次：核心系统类型来自 proto；数据集新增字段来自本包 models.py；发布生成物不手改。
 - 通用性由 Observation、Transition、Outcome、ScoreInput 等完整协议保证，不把所有输入都压成字符串。
 - 个别数据集的初始化、测试准备、评分差异仍在其专属类实现，不为了少代码而隐藏在 Worker 分支。
-- Agent、backend、model 和工具选择保持在运行配置；镜像默认/样本专用/用户覆盖规则见主方案第 6.1—6.5 节，runtime 字段已进入参考 schema 和示例。
+- Agent、backend、model 和工具选择保持在运行配置；镜像默认/样本专用/用户覆盖规则见主方案第 6.2—6.6 节，runtime 字段已进入参考 schema 和示例。
 - internet_access 属于 Environment 运行要求，脚手架默认 false；它不进入 TaskSpec 或 RunSpec，Backend 只执行 Server 已锁定的 ExecutionPlan 值。
 
 QA 的 Environment 直接实现 reset 来呈现题目，不增加问答中间基类；单轮 Agent 返回最终回答，无需通过环境 step 提交答案。重复逻辑按需提取为公共函数或通过组合调用。DSCodeBench、SWE 的仓库和测试流程不能仅因接口相同就复用问答行为；实际共享部分应提取为代码/仓库公共模块，再由专属 Environment 调用。为兼容新任务增加通用平台能力可以评审，但不应新增数据集名字分支。

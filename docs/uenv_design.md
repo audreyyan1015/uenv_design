@@ -49,7 +49,7 @@ Bridge、Server、Worker 是三种软件职责，不能直接理解为三台机�
 
 “Worker 负责评分”表示 Rust Supervisor 发起评分、提供私有材料、设置超时、校验结果并记录终态。Python Scorer 只实现答案比较、测试结果解释等数据集规则。评分器使用独立进程或评测容器，并不改变这个责任归属。一个 Python 类的存在也不要求部署一个同名微服务。
 
-### 3.1.1 现有源码的语言分布与目标保留方式
+#### 3.1.1 现有源码的语言分布与目标保留方式
 
 2026-09-07 再次只读核对远端提交 `af675b20b91c66672b0517b378205603fe424bf3`，工作区干净。Rust 与 Python 文件数量不能直接表示职责；例如 `uenv-server` 中的 Python 文件主要是压力测试和报告脚本，在线服务本身仍是 Rust。因此以下按实际调用职责分类，不用易受生成文件或统计范围影响的文件数作架构依据。
 
@@ -225,13 +225,13 @@ Worker 只读取计划指定的版本和文件，不重新查询 latest，不下
 
 SDK 对外提供 ABC，内部依赖窄 Protocol；按 Python/Rust 语言习惯使用 class/trait。相同角色共享接口，不要求所有能力组成一个巨大父类。跨进程必须依赖序列化协议，而不是假设 Python 继承关系跨语言有效。
 
-### 4.0 核心类、数据对象与调用关系
+### 4.1 核心类、数据对象与调用关系
 
 先明确这节要回答的问题：系统有哪些可扩展的类；这些类互相调用还是互相继承；它们之间传递什么数据；新增数据集时用户需要实现哪一部分。
 
 **阅读范围：以下是目标类关系，不是远端生产类图。**2026-09-07 只读核对远端，当前 Rust Worker 的 `EpisodeExecutor.execute_episode()` 仍负责环境 reset/step，OpenHands runner 则创建 Python SDK Agent/Conversation 并调用其循环。对应源码见 Worker 入口（生产源码 `uenv-worker/src/episode/executor.rs:210`） 与 OpenHands 入口（生产源码 `integrations/openhands/run_swebenchpro_official.py:906`）。设计目录已经增加 Rust `EpisodeSupervisor` 可执行参考，但不表示远端服务已经迁移。
 
-#### 4.0.1 用户接口与 Rust 系统执行器
+#### 4.1.1 用户接口与 Rust 系统执行器
 
 先只看数据集接入直接相关的核心关系。图中方法省略 context 等参数以便阅读；准确签名见参考 SDK。标为 abstract 的类是用户扩展接口。
 
@@ -298,7 +298,7 @@ EpisodeSupervisor 是 Rust Worker 内唯一的 attempt 生命周期执行器。�
 
 本地参考位置：[Python 用户接口与数据类型](../reference/sdk/src/uenv/sdk/__init__.py)、[Python 类型与 schema 生成](../reference/sdk/src/uenv/sdk/modeling.py)、[Rust EpisodeSupervisor](../reference-control/src/supervisor.rs)、[Rust 计划解析](../reference-control/src/plan.rs)、[Rust 评分补全](../reference-control/src/scoring.rs)。本轮修改的是 `design` 参考实现；远端代码和本地 `source` 快照未修改。
 
-#### 4.0.2 谁继承谁：系统基类与数据集专属类
+#### 4.1.2 谁继承谁：系统基类与数据集专属类
 
 每个数据集都有自己的 Adapter、Environment、Scorer。下面按职责分别画出九个数据集的全部入口，不能把某一张图中的一个数据集类理解为其他数据集共用的入口。空心三角箭头 `<|--` 指向父类。
 
@@ -384,7 +384,7 @@ OpenHandsAdapter 是待接入统一接口的 Agent 包装类，不是 DatasetAda
 
 manifest 必须指向本包实际声明的三个类。仅导入公共类并改名不算专属类；Adapter、Environment、Scorer 分别实现 normalize、reset、score，方法体可以调用共享函数。
 
-#### 4.0.3 数据归谁、交给谁：任务、执行控制、交互和评分
+#### 4.1.3 数据归谁、交给谁：任务、执行控制、交互和评分
 
 **系统只保留一种公开任务定义 TaskSpec。** 它描述要完成的任务，可直接提供给 Environment、Agent 和 Scorer。运行配置和私有评分材料各自放在自己的位置，不再通过另一种任务类型过滤字段。
 
@@ -704,7 +704,7 @@ flowchart TD
 
 以上控制链路已在 `design/reference-control` 中提供同步 Rust 参考，并以独立 AgentHost、EnvironmentHost mock 端口验证统一顺序和权限方向。它接收 DispatchRequest 对象，但不实现真实 RPC 传输、lease/replay fencing、进程强制中断或生产私有存储授权。图中的角色分工不等于每个角色都要部署为一个新服务。
 
-#### 4.0.4 谁调用谁：多轮执行时序
+#### 4.1.4 谁调用谁：多轮执行时序
 
 下面使用有状态环境说明 step 的位置。工具与沙箱路径下一小节单独画。
 
@@ -776,7 +776,7 @@ AgentContext 不是另一个调度服务。它在 Python 中向 Agent 提供 tas
 
 单轮问答仍调用同一个 Agent.run，只生成一次回答，可以不调用 step。多轮策略由 AgentRunner 决定，Rust Worker 强制公共预算；Supervisor 不再套一层模型决策循环。多轮中的公开反馈来自 Environment.step 的 Observation 或工具结果；这些内容会写入轨迹，但正式 ScoreResult 只在最终 Outcome 冻结后产生一次。
 
-#### 4.0.5 工具与后端位于哪里
+#### 4.1.5 工具与后端位于哪里
 
 这一张是目标逻辑依赖图。用户扩展是 Python，准入和资源控制是 Rust；跨进程通过生成协议通信。`ToolHost` 是 Rust 内部端口，`ToolGateway` 是它的实现，不是新的部署进程。普通 Python ToolExecutor 与 Environment 使用同一个 sandbox 角色 host；Agent 原生会话工具留在 Agent host。ToolGateway 只按唯一 `ExecutionPlan.tools` 选择路由，Backend 只提供本次 session。本地 Rust 参考已实现受控模型/工具入口，真实 IPC 接线和 OpenHands 适配器仍未实现。
 
@@ -820,9 +820,9 @@ classDiagram
 
 工具不是 Agent 的父类，Backend 也不是 Environment 的父类。它们通过受控接口组合：Agent 决定调用，工具完成操作，后端提供资源能力。ProcessBackend、DockerBackend、PodmanBackend 在 Worker 侧实现统一后端协议；这不意味着 Python ABC 的继承关系可以直接跨语言执行。ToolHost 返回“能否路由”，AgentHost 返回“模型能否看见”；Supervisor 把两者分别与唯一 `ExecutionPlan.tools` 核对，返回值不成为第二份工具配置。
 
-状态环境的动作工具可以调用 AgentContext.step；文件工具通过 session 操作文件。一次动作只执行一次，不能先由文件工具修改，再让 Environment.step 重复修改。只操作 SDK 会话状态的原生工具无需经过任务 Backend，但仍遵守工具选择、平台安全底线、计数和记录。工具使用规则见第 4.1 节。
+状态环境的动作工具可以调用 AgentContext.step；文件工具通过 session 操作文件。一次动作只执行一次，不能先由文件工具修改，再让 Environment.step 重复修改。只操作 SDK 会话状态的原生工具无需经过任务 Backend，但仍遵守工具选择、平台安全底线、计数和记录。工具使用规则见第 4.2 节。
 
-#### 4.0.6 用户新增数据集时改哪些类
+#### 4.1.6 用户新增数据集时改哪些类
 
 | 需求 | 用户实现或引用 | 公共流程是否修改 |
 |---|---|---|
@@ -836,7 +836,7 @@ classDiagram
 
 用户不实现 Rust EpisodeSupervisor、ComponentHost 或评分调用器。`Environment` 只强制作者提供 reset；其余方法有默认行为或明确不支持动作的默认实现。需要状态转移时必须实现 step，需要产物或状态收集时覆盖对应方法；默认方法不是自动具备所有能力。
 
-#### 4.0.7 通用性与实现边界
+#### 4.1.7 通用性与实现边界
 
 完整扩展协议、可复用组件、用户模板是三个层次。模板组合组件，组件实现接口；字段映射、题目渲染、binary_score 只是可复用辅助逻辑，不限制核心协议的表达能力。当前参考 SDK 支持结构化观测、状态转移、冻结产物和单次最终评分；真实后端、OpenHands 与官方 harness 仍属生产接入工作。详见 [参考 SDK vNext.3](reference_sdk_vnext3.md)。
 
@@ -879,7 +879,7 @@ Process/Docker/Podman 统一管理计算资源；已有网页服务或远端模�
 
 少写代码依靠公共默认行为、复用函数和脚手架，不以省略三个专属类为手段。通用性的标准是：新增任务行为能通过已定义的扩展接口实现，且无须在主流程增加业务分支。核心缺少某项资源或传输能力时允许增加通用平台扩展，不承诺现有实现已经覆盖所有可能任务。
 
-### 4.1 工具：怎么写、怎么用、怎么管
+### 4.2 工具：怎么写、怎么用、怎么管
 
 **用户写一份 Python 工具，UEnv 负责接入不同 Agent，并管理调用。**本节定义目标用法；现有代码差异和待实现事项集中见第 13.1 节。
 
@@ -913,11 +913,11 @@ flowchart LR
 
 UEnv 管理 MCP 连接及其生命周期，只开放获准工具，不要求用户重复填写自动启动的服务地址。每次调用只计数一次，用 ToolCall/ToolResult 记录参数、结果或错误，并关联实际模型调用；超时和取消也要记录，崩溃导致缺失时标明轨迹不完整。工具格式转换不改写真实模型消息和训练 token。
 
-### 4.2 轨迹：谁记录、记录什么、如何保存
+### 4.3 轨迹：谁记录、记录什么、如何保存
 
 **一句话定义：轨迹是一次 attempt 中已经发生事实的有序事件流，由 Rust Worker 记录；Agent、Environment、Tool 和 Scorer 只产生业务结果，不自行组装、排序、封存或上传轨迹。**评测与后训练读取同一条轨迹，不按数据集或 Agent 类型换格式。
 
-#### 4.2.1 轨迹协议只有事件与索引两层
+#### 4.3.1 轨迹协议只有事件与索引两层
 
 | 对象 | 作用 | 是否保存事件内容 |
 |---|---|---|
@@ -955,7 +955,7 @@ classDiagram
   ArtifactRef ..> TrajectoryEvent : JSONL分片包含
 ```
 
-#### 4.2.2 所有 Agent 共用同一组事件
+#### 4.3.2 所有 Agent 共用同一组事件
 
 | `kind` | `payload` 类型 | 表示什么 |
 |---|---|---|
@@ -973,7 +973,7 @@ classDiagram
 
 模型提出调用工具与工具实际执行是两个事实。`generation` 保存模型原始输出，`tool_call`/`tool_result` 保存受管执行；通过 `generation_id` 和 `tool_call_id` 关联，不用相同字段表达两个阶段。Environment 的动作结果只在 `Transition` 中定义一次，`EnvironmentTransition.transition` 保存其独立副本。
 
-#### 4.2.3 写入路径
+#### 4.3.3 写入路径
 
 ```mermaid
 flowchart TD
@@ -993,7 +993,7 @@ Python 组件不能直接设置 `event_id`、`sequence`、attempt 身份或时�
 
 同一个 attempt 只有一个 sequence 空间，所有分片按 `event_segments` 数组顺序排列，分片内部继续按 `sequence` 递增。`checkpoint()` 和最终 `seal()` 都必须把当时尚未成段的事件写成最后一个分片，因此评分可以读取一个完整的时间点快照。Worker 先逐事件写本地持久 spool，再按上述大小形成不可变分片。`checkpoint()` 返回前，其 manifest 引用的全部分片必须已经可读并通过摘要校验；只有尚未进入 manifest 的预上传可以异步。Server ACK 前不得删除唯一副本，上传重试不能改变事件内容、顺序或摘要。
 
-#### 4.2.4 评分前快照与最终封存
+#### 4.3.4 评分前快照与最终封存
 
 ```mermaid
 sequenceDiagram
@@ -1020,7 +1020,7 @@ TrajectoryManifest 只用一个 `trajectory_status` 表达清单状态：`scorin
 
 `EpisodeResult.score` 和 `score` 事件不得分别计算。Rust Supervisor 先形成一个不可变的 `ScoreResult`，把同一个值写入两处：前者方便查询最终结果，后者保留发生顺序。`terminal` 只保存终态摘要，不包含最终 `trajectory_ref`，从而避免 manifest 摘要引用自身。
 
-#### 4.2.5 用户与读取端看到什么
+#### 4.3.5 用户与读取端看到什么
 
 数据集作者只实现 Observation、Transition、Outcome 和评分业务，不调用轨迹 API。普通用户从 `EpisodeResult.trajectory_ref` 加载最终 manifest；Scorer 从 `ScoreInput.trajectory_ref` 加载评分前 manifest；Trainer 读取 `generation` 事件中的真实模型数据并与同一个 `ScoreResult.reward` 配对。展示层可以裁剪或格式化派生视图，但不能覆写原始事件。
 
@@ -1028,7 +1028,7 @@ TrajectoryManifest 只用一个 `trajectory_status` 表达清单状态：`scorin
 
 ## 5. 完整执行流程及调用关系
 
-### 5.0 先看一次任务的完整顺序
+### 5.1 先看一次任务的完整顺序
 
 以下图描述目标流程，尚未表示生产代码已经按此执行。先按中文动作阅读；后面的小节把动作对应到类的方法。
 
@@ -1076,7 +1076,7 @@ sequenceDiagram
 
 这张图省略了进程间转发及内部状态工具。Worker 一列是 Rust Supervisor：它强制环境准备、冻结、评分和清理的外层顺序；模型决策循环只存在于 Python AgentRunner/SDK。各 AgentRunner 使用相同外层顺序，不经过独立 Agent 池分配。
 
-### 5.0.1 Worker 内谁调用谁
+#### 5.1.1 Worker 内谁调用谁
 
 ```mermaid
 flowchart TB
@@ -1109,7 +1109,7 @@ flowchart TB
 
 清理和上报是两个可恢复的工作：首次清理必须在最终 terminal、manifest 与 EpisodeResult 形成前完成一次，因此 cleanup_status 有确定值；网络不通时保留待上报记录，不能因等待 ACK 一直占用容器。清理固定为 ScorerHost → AgentHost → ToolHost → EnvironmentHost → Backend；每个 close 都必须幂等，一步失败也继续关闭后续资源。清理失败进入有限重试队列，后续重试只更新资源清理记录，不改不可变 score、轨迹或已接纳终态。示意图中的异常出口代表所有阶段的统一错误处理，不是只处理画出的几种错误。
 
-### 5.0.2 单轮问答与仓库修复如何使用相同流程
+#### 5.1.2 单轮问答与仓库修复如何使用相同流程
 
 | 阶段 | 数学单轮示例 | 仓库修复示例 |
 |---|---|---|
@@ -1122,7 +1122,7 @@ flowchart TB
 
 差异来自已选择的扩展实现和预算，调度器不出现 `if dataset == swe`。一次工具调用不一定对应一次 Environment.step：操作沙箱的工具已经执行了修改，不能再由 Environment.step 重复修改；状态型环境则由其工具将一个明确动作转交 Environment.step。
 
-### 5.1 发布与准备阶段
+### 5.2 发布与准备阶段
 
 **先选择代码包，再准备本次样本。发布代码包、发布数据、提交任务是三个不同操作，不要求每次运行都重新发布。**存储格式和权限遵循第 3.4 节。
 
@@ -1149,7 +1149,7 @@ flowchart TB
   READY -->|可选：发布数据| SAVE[Hub 保存独立数据 revision<br/>登记文件、样本索引和访问权限]
   READY --> BUILD[Bridge 组装 EpisodeRequest]
   RUN[RunSpec：本次 Agent、后端、模型<br/>工具、Scorer、作业用途和预算] --> BUILD
-  BUILD --> SUBMIT[按第 5.2 节提交任务]
+  BUILD --> SUBMIT[按第 5.3 节提交任务]
 ```
 
 1. **注册包，再选择角色。**已有包直接使用精确版本；新增或修改实现时才校验、发布新代码版本。发布服务把数据集 PackageManifest 的 Adapter/Environment/Scorer 入口、角色配置 schema、任务 schema 和运行要求登记到组件目录；独立 Agent 和工具分别登记 AgentManifest、ToolSpec。运行时没有独立的 `package` 选择字段：用户只填写 `RunSpec.environment` 和 `RunSpec.scorer`。两者通常引用同一个数据集包，系统按角色取得其中不同的 Environment/Scorer 类；包内声明不替用户选择 Agent 或 Backend。图中校验失败均直接报错，不进入发布或提交。
@@ -1158,7 +1158,7 @@ flowchart TB
 4. **按需发布数据。**可保留本地使用，也可独立发布到 Hub；发布前固定数据 revision、文件 digest 和读取权限，再登记索引。代码不变时无需重新发包，数据内容改变时不能覆盖旧 revision。数据发布本身不启动任务。
 5. **提交本次任务。**Bridge 将准备好的样本与 RunSpec 组合，生成本次请求身份并提交。Server 和 Worker 接收相同的标准结构，Worker 不再从另一个 catalog 补齐或替换题目。Hub API 与准备入口的实现差异见第 13.2 节。
 
-### 5.2 Bridge 内部
+### 5.3 Bridge 内部
 
 ```mermaid
 flowchart TB
@@ -1188,7 +1188,7 @@ build_episode_request/build_batch_request 函数接收已标准化的公开 Task
 
 结果返回后：`ResultCollector.collect()` -> `TraceLoader.load()` -> `TrainingSampleBuilder.build()` -> `VerlAdapter.to_framework_output()`。按 request/episode identity 对齐结果，不能只依赖返回顺序。同步在批次边界等待，异步按准备好的结果交给 Trainer；取消与停止消费分开。
 
-### 5.3 Server 内部
+### 5.4 Server 内部
 
 ```mermaid
 flowchart TB
@@ -1224,7 +1224,7 @@ flowchart TB
 
 Server 不创建 SWE session，不准备测试 patch，不解析 pytest，不调用 Agent 工具。失联与执行失败由 EpisodeCoordinator 按保存的 `RunSpec.retry`、错误分类及当前 attempt/lease 状态统一决定是否重试，不再定义另一种 AttemptPolicy。
 
-### 5.4 Worker 内部
+### 5.5 Worker 内部
 
 ```mermaid
 flowchart TB
@@ -1292,7 +1292,7 @@ EpisodeSupervisor 是唯一外层生命周期。同一个 `ComponentHostProcess`
 
 通用 Agent 实现维护 messages 和显式上下文策略；当前参考 PlainAgent 为单轮实现。OpenHandsAdapter 调用 SDK Conversation.run 并转换其事件；不在 Worker 再套一次 generation 循环。SDK 自己的 iteration 计数仅作为额外限制，统一模型/工具预算由 Rust AgentRuntime 在实际调用前强制执行。
 
-### 5.5 异常与取消
+### 5.6 异常与取消
 
 任务答错：执行 completed，评分 ok，success=false，reward=0。评分器崩溃：评分 error，success=null，reward=null，不能伪装答错。未产生可训练 token 的结果不可进入训练。
 
@@ -1318,7 +1318,7 @@ EpisodeSupervisor 是唯一外层生命周期。同一个 `ComponentHostProcess`
 
 评分使用本次 ExecutionPlan 已锁定的后端和兼容运行资源，并通过同一 `run_harness` 入口采用隔离的评分工作区/权限视图。第一版不提供第二个评分后端配置来源，也不允许 scorer 私自执行本机 subprocess 或切换后端。纯文本 Scorer 不调用 run_harness；代码类 Scorer 通过 ScoringContext 请求它。
 
-### 6.0 Environment 与 Backend 的关系
+### 6.1 Environment 与 Backend 的关系
 
 Environment 定义任务规则，例如如何生成初始 Observation、如何处理 Action、如何产生 Transition，以及结束时收集什么 Outcome。Backend 提供运行位置和资源，例如进程、容器、工作目录、文件与命令执行。Backend 不是 Environment 的父类，Environment 也不持有 Backend 类型或配置；Rust EpisodeSupervisor 创建本次会话后，把受控会话能力交给 Python EnvironmentContext，从而组合二者。
 
@@ -1339,7 +1339,7 @@ Environment 的 Python 代码由受管 ComponentHost 调用。Rust Worker 对所
 
 当前源码还没有实现这项通用组合：普通插件清单仍通过 `supported_backends` 偏向 process，SWE 另走 `SweSessionBackend`。这正是重构对象，不能把当前限制写成目标接口。当前插件 Process 检查（生产源码 `uenv-worker/src/plugin/host.rs:188`） · 当前 SWE 后端分支（生产源码 `uenv-worker/src/runtime.rs:336`） · 当前独立 SWE 后端协议（生产源码 `uenv-worker/src/swe/backend/mod.rs:91`）
 
-### 6.0.1 访问控制：Environment 包只声明是否需要互联网
+#### 6.1.1 访问控制：Environment 包只声明是否需要互联网
 
 数据集作者只需回答一个容易判断的问题：这个 Environment 是否需要访问公共互联网。运行用户选择 Environment，不再填写第二个网络开关。任务怎样创建进程或容器、怎样隔离文件和权限，都不进入 UEnv 用户协议，由 Backend 按平台固定规则实现。
 
@@ -1370,11 +1370,11 @@ flowchart LR
 
 内部实现说明：当前源码的 `RestrictedShell` 和 `FullShell` 会同时切换操作系统与容器限制，SWE 路径还会从 payload 读取 `command_mode`。当前 CommandPolicy（生产源码 `uenv-worker/src/swe/command_policy.rs:17`） · 当前 Podman 参数（生产源码 `uenv-worker/src/backend/podman.rs:34`） · 当前 SWE payload 读取（生产源码 `uenv-worker/src/episode/executor.rs:608`）。迁移后删除公共 command_mode：底层限制成为 Backend 固定内部策略；只有任务是否需要公共互联网转换为 internet_access。容器用于 Agent/Worker 通信的内部网络不等于公共互联网，不能据此把值设为 true。
 
-### 6.1 镜像在哪里指定
+### 6.2 镜像在哪里指定
 
 **后端指定运行引擎，镜像指定容器内容。**Docker/Podman 创建任务容器时必须有镜像；不存在“不使用镜像的 Docker 模式”。所谓“不用数据集专用镜像”，是改用满足依赖的公共镜像，不是一条新的执行路径。
 
-下面的 runtime 字段已落实到本地 schema、参考解析函数与九个示例。解析函数通过注入的镜像解析器验证接口规则；真实镜像拉取、平台探测及容器运行仍未实现。迁移差异见 6.5。
+下面的 runtime 字段已落实到本地 schema、参考解析函数与九个示例。解析函数通过注入的镜像解析器验证接口规则；真实镜像拉取、平台探测及容器运行仍未实现。迁移差异见 6.6。
 
 | 来源 | 目标填写位置 | 谁填写 | 作用范围 |
 |---|---|---|---|
@@ -1388,7 +1388,7 @@ flowchart LR
 
 数据集声明镜像需求不等于选择后端。`PackageManifest.runtime.image` 可以被 Docker 或兼容的 Podman 使用；Process 是否可用由本机依赖方案决定，不能由数据集名称决定。
 
-### 6.2 完整解析规则
+### 6.3 完整解析规则
 
 对每条 EpisodeRequest 单独执行以下规则：
 
@@ -1403,7 +1403,7 @@ flowchart LR
 
 后端驱动不读取 dataset 名称，不推导 SWE 镜像名。Environment.reset 也不在执行时自行换镜像；它基于计划已创建的 session 准备任务状态。数据集特有的原始镜像命名规则放在 Adapter/prepare 中。
 
-### 6.3 QA 与 SWE 的填写示例
+### 6.4 QA 与 SWE 的填写示例
 
 以下为目标字段片段，不是完整可执行配置；所有镜像地址均为占位示例。
 
@@ -1438,7 +1438,7 @@ runtime:
 
 若该镜像没有任务所需仓库/依赖准备方案或 harness，执行前或准备阶段明确失败，不能把覆盖后的结果无条件称为官方环境结果。版本与来源写入实际执行计划，比较结果时可查。
 
-### 6.4 Process、评分环境与容器执行位置
+### 6.5 Process、评分环境与容器执行位置
 
 选择 Process 时不消费 OCI 镜像，使用 `ProcessBackendConfig.runtime_profile` 对应的管理员本机依赖配置。该字段不选择工作区根目录，也不改变平台安全底线或 `ExecutionPlan.internet_access`。数据集/样本声明镜像可以与合法的本机方案共存，但不能因为有镜像就认定本机依赖齐全。只有容器方案而没有本机准备、兼容验证或目标网络要求落实能力时明确拒绝 Process。
 
@@ -1448,7 +1448,7 @@ runtime:
 
 Environment host 的执行位置服从所选后端：QA + Docker 也在任务容器 session 中调用 reset/step/finalize；SWE + Process 使用本机受管 session 与独立工作区。Rust Worker 通过统一 ComponentHost 协议管理这些调用，Python 类跨容器依靠生成的 IPC/RPC 协议，不靠继承自动跨进程。Agent host 是同一进程控制实现的独立角色实例，位于 Worker 管理的 Agent 运行位置；模型请求继续经过 Rust ModelProvider。因而任务镜像只决定 Environment/sandbox 工具的运行内容，不决定 Agent 或模型服务位置。本地 Rust 参考以 AgentHost、EnvironmentHost 两个 mock 端口代替两个真实进程实例，真实位置切换尚未实现。
 
-### 6.5 当前源码、参考模板与目标协议的差异
+### 6.6 当前源码、参考模板与目标协议的差异
 
 2026-09-06 已只读核对远端：SWE 源记录使用 `image_cache_key`，`SweInstance.image_ref()` 优先采用显式值，否则按实例/变体规则推导；容器后端读取 `ProvisionRequest.image` 创建容器。源字段及解析（生产源码 `uenv-worker/src/swe/dataset.rs:53`） · 后端创建（生产源码 `uenv-worker/src/swe/backend/cli_container.rs:54`）
 
@@ -1564,7 +1564,7 @@ Rust `mod.rs`、Python `__init__.py` 只导出模块和公共符号，不承载�
 
 保留 TaskSpec/RunSpec/EpisodeRequest/ExecutionPlan 的不同复用范围；PreparedSample 仅在准备阶段返回，TaskSpec 只含公开数据，私有材料经 EpisodeRequest.private_data 单独交给评分角色；保留角色各异的 Context；Rust EpisodeSupervisor 直接监管 Python ComponentHost 与 ScorerHost；保留事务、租约、结果 outbox、取消和清理。Outcome 合并提交与收集后的数据类型，finalize 和 state 填写权限仍保留；ComponentRef/ResolvedComponent 仍区分待解析与已锁定版本。
 
-本次配置与 ScoreResult 简化已落实到本地 SDK、schema 和九个参考包；Server/Worker 的内部类调整是目标组织设计，尚未迁移远端服务。镜像 runtime 字段的待实施状态仍见 6.5，不因本次精简而宣称已实现。
+本次配置与 ScoreResult 简化已落实到本地 SDK、schema 和九个参考包；Server/Worker 的内部类调整是目标组织设计，尚未迁移远端服务。镜像 runtime 字段的待实施状态仍见 6.6，不因本次精简而宣称已实现。
 
 ## 10. 字段协议与版本化
 
@@ -1657,7 +1657,7 @@ SWE Verified/Lite/Pro/Smith：抽出仓库准备、依赖计划、测试 patch�
 
 ### 13.1 工具调用迁移说明
 
-第 4.1 节是目标设计；当前 20 个 Rust 控制测试和 20 个 Python 契约/评分测试不证明 MCP 或新工具接口已经可用。`internet_access` 的包声明和 Rust 计划解析已进入参考实现，真实后端隔离仍待实现和部署验收。
+第 4.2 节是目标设计；当前 20 个 Rust 控制测试和 20 个 Python 契约/评分测试不证明 MCP 或新工具接口已经可用。`internet_access` 的包声明和 Rust 计划解析已进入参考实现，真实后端隔离仍待实现和部署验收。
 
 | 当前参考代码或源码快照 | 需要完成的迁移与验收 |
 |---|---|
@@ -1679,18 +1679,18 @@ SWE Verified/Lite/Pro/Smith：抽出仓库准备、依赖计划、测试 patch�
 
 验收以同一条样本分别从本地和 Hub 准备后进入同一执行链为准；检查内容、版本、评分材料一致，以及内容来源冲突、缺样本、无权限、摘要不符、缓存失效时明确报错。修复后的 Worker 不因数据集名称选择不同查题路径。
 
-## 内部实现的精简约束
+## 14. 内部实现的精简约束
 
 - 没有独立状态、生命周期或资源的操作优先写成函数。生产评分调用是 Rust EpisodeSupervisor 使用的 `run_score` 函数，不增加 ScoringService；Python 只实现 Scorer 业务规则。
 - 只有真实存储、权限、进程或事务边界才新增传输对象；不因“后续可能需要”增加材料包装、加载层、工厂或转发服务。
 - 同一 TypedConfig 从准备、请求到评分原名传递。保留必需验证与权限限制，删除无实际作用的中间转换；不能只减少类图中的框。
 - 需要支持不同实现的扩展点保留基类，例如 DatasetAdapter、Environment、Scorer、AgentRunner、Backend；函数化不改变每个数据集三个专属类的要求。
 
-## 字段与配置的实现状态
+## 15. 字段与配置的实现状态
 
 本地 Rust EpisodeSupervisor 参考接收一个 DispatchRequest。所有逐 episode 执行配置只从其中的 ExecutionPlan 读取；同级 lease、remaining_timeout_ms、consumed_usage 只表示派发授权和累计运行状态，不能覆盖组件、模型、工具、评分器或 limits。Python 仅保留用户扩展接口。逐项配置来源、修正内容与实现边界见 [配置审计](configuration_audit.md)。
 
-## 本地执行入口落实情况（2026-09-06）
+## 16. 本地执行入口落实情况（2026-09-06）
 
 Rust EpisodeSupervisor 只接收 DispatchRequest；初始化参数只注入系统端口和宿主能力。组件、模型、工具绑定、评分角色、预算上限和 seed 都从 dispatch.plan 派生，不能额外传入逐任务覆盖。remaining_timeout_ms 只能缩短 plan.deadline_at_ms，consumed_usage 只初始化同一 episode 的累计计数。plan_digest 只留在受信的 Server/Worker 计划记录中，公开轨迹不复制它。后端只创建选定执行会话，Supervisor 将受控能力绑定到该会话；Environment 和工具不自行重选后端，也不存在按 Environment × Backend 组合编写的适配器。
 
