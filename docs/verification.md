@@ -2,15 +2,23 @@
 
 验证日期：2026-09-10。验证对象仅为 `architecture-review-0905/design`。
 
+## 目录整理复验（2026-09-10）
+
+- 文档集中到 `docs/`，维护脚本和 Python 依赖清单集中到 `scripts/`；Rust workspace 配置保留在根目录。
+- 从仓库根目录运行三个 `scripts/build_*.py` 生成器成功；生成的协议和数据集示例内容未改变，字段字典与模块清单写入 `docs/`。
+- `python -B -X utf8 scripts/validate_design.py` 通过全部 29 项测试，其中一项调用整套 Rust 控制测试。
+- 检查 README 和所有设计文档的 49 个本地文件链接，目标全部存在。
+- 本次复验使用仓库外的依赖缓存和 Rust 编译目录，未在设计目录新增 `.dependencies`、`target` 或 `__pycache__`。本次未重复 wheel 构建；下文 wheel、格式与 clippy 记录来自同日整理前的验证。
+
 ## 已执行
 
 从 design 目录执行；wheel 检查使用带 setuptools/wheel 的本机 Python，在临时源码副本中构建。
 
 ```text
-python -B -X utf8 build_contracts.py
-python -B -X utf8 build_examples.py
-python -B -X utf8 build_module_map.py
-python -B -X utf8 validate_design.py
+python -B -X utf8 scripts/build_contracts.py
+python -B -X utf8 scripts/build_examples.py
+python -B -X utf8 scripts/build_module_map.py
+python -B -X utf8 scripts/validate_design.py
 cargo fmt --all --manifest-path Cargo.toml -- --check
 cargo clippy --offline --locked --manifest-path Cargo.toml --all-targets -- -D warnings
 python -m pip wheel --no-cache-dir --no-index --no-deps --no-build-isolation <reference package>
@@ -25,7 +33,7 @@ python -m pip wheel --no-cache-dir --no-index --no-deps --no-build-isolation <re
 - 21 个 Rust 控制链测试通过。
 - Rust 格式检查和 `clippy -D warnings` 通过。
 - SDK、共享评分规则和九个数据集包共 11 个 Python wheel 离线构建成功；在系统临时目录的源码副本中构建，确认 dataset_adapter.py 进入 wheel、本地 tests 不进入 wheel。此项只验证打包，不代表安装后的生产运行通过。
-- `validate_design.py` 的第 29 个测试运行整套 Rust 测试，最终输出 `Ran 29 tests ... OK`。
+- `scripts/validate_design.py` 的第 29 个测试运行整套 Rust 测试，最终输出 `Ran 29 tests ... OK`。
 
 ## 已验证的关键约束
 
@@ -37,7 +45,7 @@ python -m pip wheel --no-cache-dir --no-index --no-deps --no-build-isolation <re
 - 数据集 YAML、PackageManifest 和 ExecutionPlan 不含额外 UEnv `dependencies` 列表；Python 校验拒绝重新提交该字段，Rust 参考不再递归解析组件依赖。Python/Cargo 安装依赖保留。
 
 - 九个数据集各自声明 Adapter、Environment、Scorer，共 27 个直接子类。
-- 九个数据集业务字段只定义在各包 `models.py`；中央 `build_contracts.py` 和通用 `build_examples.py` 不包含数据集模型或名称。生成 schema 与模型类型标注逐字段一致。
+- 九个数据集业务字段只定义在各包 `models.py`；中央 `scripts/build_contracts.py` 和通用 `scripts/build_examples.py` 不包含数据集模型或名称。生成 schema 与模型类型标注逐字段一致。
 - 九份公开 `run.yaml` 都不含 `schema_ref`、episode_id、attempt_id、lease 或 digest；组件目录在提交边界把公开 config 自动封装成内部 RunSpec。
 - 数据集作者目录不保存 manifest、TaskSpec、EpisodeRequest 或 ExecutionPlan；这些对象只出现在独立生成目录。
 - 九个包声明与 PackageManifest 均拒绝 metadata、schema_version、dependencies；公开 run.yaml 的 schema_version 由提交边界生成。

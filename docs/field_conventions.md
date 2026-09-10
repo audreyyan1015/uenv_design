@@ -130,7 +130,7 @@ SciTab.claim 是待核验陈述，contexts 是背景证据，answer 是私有参
 
 ## 4. 校验与扩展要求
 
-当前 `build_contracts.py` 是本地参考包的过渡协议源，生成 schema 与递归字段字典；不要直接修改生成文件。目标生产协议只编辑 `contracts/proto/uenv/v1/*.proto`，由统一工具生成 Rust/Python 类型、RPC stub、核心 JSON schema 和字段字典。数据集业务字段只编辑包内 `models.py`，发布工具生成包 schema；用户不维护 `schemas/` 目录。所有九个参考数据集仍通过 build_examples.py 同步生成，完成 proto 工具链迁移前不能把这套本地生成方式描述为生产现状。
+当前 `scripts/build_contracts.py` 是本地参考包的过渡协议源，生成 schema 与递归字段字典；不要直接修改生成文件。目标生产协议只编辑 `contracts/proto/uenv/v1/*.proto`，由统一工具生成 Rust/Python 类型、RPC stub、核心 JSON schema 和字段字典。数据集业务字段只编辑包内 `models.py`，发布工具生成包 schema；用户不维护 `schemas/` 目录。所有九个参考数据集仍通过 scripts/build_examples.py 同步生成，完成 proto 工具链迁移前不能把这套本地生成方式描述为生产现状。
 
 本地 Rust `PlanResolver` 校验请求身份、input 摘要、精确组件、工具授权、harness、镜像优先级、预算和配置锁定。组件 catalog、Agent profile 与 image_resolver 是显式注入的可信依赖；它不接收独立 package 或特定 Worker capabilities。PackageManifest 在发布时转换为 catalog 元数据，运行时只沿 `RunSpec.environment/scorer` 已选引用读取对应角色入口、配置 schema 和要求。`required_capabilities` 由解析器汇总，Placement 再选择 Worker。Python `fixture_plan.py` 只生成静态示例，不是生产包注册协议或真实镜像解析器。
 
@@ -167,4 +167,4 @@ EnvironmentTransition 仅定义 environment_step_index、observation_before、ac
 
 TrajectoryManifest 使用 `trajectory_status=scoring_checkpoint/final_complete/final_partial` 区分评分前快照、完整最终轨迹和缺失事件的最终轨迹，不再用 `complete` 同时表达“尚未结束”和“记录不完整”。`created_at_ms` 只表示当前 manifest 的创建时间；`event_count` 与从 0 连续的 sequence 一起校验事件数。权威轨迹始终记录完整标准事件，查询端 summary 是派生视图，不进入 RunSpec。
 
-该结构已经同步到 build_contracts.py、生成 schema、字段字典与 Rust 记录入口。校验拒绝同时携带顶层 observation/terminated 等旧字段及 transition 的双重表示。此结构不改变 ExecutionPlan 的唯一配置来源。
+该结构已经同步到 scripts/build_contracts.py、生成 schema、字段字典与 Rust 记录入口。校验拒绝同时携带顶层 observation/terminated 等旧字段及 transition 的双重表示。此结构不改变 ExecutionPlan 的唯一配置来源。

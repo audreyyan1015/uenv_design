@@ -1,6 +1,6 @@
 from pathlib import Path
 
-ROOT=Path(__file__).resolve().parent
+ROOT=Path(__file__).resolve().parents[1]
 MODULES={
 "contracts/proto/uenv/v1": {
 ".":[
@@ -186,7 +186,8 @@ def main():
               '每个数据集的 dataset_adapter.py、environment.py、scorer.py 与三个专属类统一必需，其余辅助文件按需创建。三个入口类分别直接继承系统基类，并实现 normalize、reset、score；Scorer 只处理单条 episode。公共逻辑通过函数或组合复用，不复制算法。run.yaml 属于训练、评测或实验项目，不是数据集包文件。九个 `reference/datasets/*` 示例已经使用同一 `dataset.yaml + pyproject.toml + src/<package> + tests` 布局；公开运行文件位于 `reference/runs`，生成对象位于 `reference/generated`。产品侧作者 CLI 尚未在生产源码实现。','',
               '基础组件包：packages/agents/plain、packages/agents/openhands 各含 runner.py、AgentManifest、config schema 和 contract tests；AgentManifest 只声明 supported_interfaces 与 required_tool_names。packages/tools/terminal、packages/tools/file_editor 等各含 executor.py、ToolSpec、input/output schema 和 contract tests。packages/adapters/ 下按接口提供工具适配包，每包含 adapter.py、接口声明和 contract tests；新增使用既有接口的工具不修改 Agent 包。原生状态工具的包装可与对应 Agent 作为同一分发包发布，但保持独立版本入口。共享呈现函数和评分辅助放 packages/shared，按版本依赖，禁止复制源文件到各数据集。','',
               f'共列出 {count} 个服务/SDK目标源码文件。实现时允许合并职责紧密且很小的模块，但不能改变依赖方向或把不同领域职责塞入一个大文件。文件数不是验收指标。']
-    (ROOT/'module_map.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
+    (ROOT/'docs').mkdir(parents=True, exist_ok=True)
+    (ROOT/'docs/module_map.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
     print('Module map:',count,'files')
 
 if __name__=='__main__': main()

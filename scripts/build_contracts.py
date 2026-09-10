@@ -3,7 +3,7 @@ from pathlib import Path
 import json
 import copy
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 D = {}
 
 def ref(name, description=None):
@@ -425,7 +425,7 @@ def main():
         (extensions/(name+'.schema.json')).write_text(json.dumps(document,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
     schema={"$schema":"https://json-schema.org/draft/2020-12/schema", "$id":"urn:uenv:vnext:contracts", "$defs":external_refs(core)}
     (target/'uenv.schema.json').write_text(json.dumps(schema,ensure_ascii=False,indent=2)+'\n',encoding='utf-8')
-    lines=['# UEnv vNext 字段字典','', '本文件由本地过渡生成器 build_contracts.py 生成。目标生产版本改由 contracts/proto/uenv/v1/*.proto 生成；本文件不是另一处可编辑协议。所有对象默认拒绝未知字段；必填字段没有隐式默认值。run.yaml 展开后的完整 RunSpec 是唯一用户配置输入。', '',
+    lines=['# UEnv vNext 字段字典','', '本文件由本地过渡生成器 scripts/build_contracts.py 生成。目标生产版本改由 contracts/proto/uenv/v1/*.proto 生成；本文件不是另一处可编辑协议。所有对象默认拒绝未知字段；必填字段没有隐式默认值。run.yaml 展开后的完整 RunSpec 是唯一用户配置输入。', '',
            '嵌套字段的必填是指其父对象已提供时；可选父对象省略时无需补子字段。', '',
            'JSON 数字不得为 NaN/Infinity；时间统一毫秒。未提供的可选字段省略，不用空字符串代替 null；有明确允许空字符串的字段以定义为准。', '',
            'TypedConfig 的 data 不是任意 JSON：必须递归满足 schema_ref 指向的版本化 schema。表中 $ref 继续展开到同名结构。新扩展只在包内 models.py 定义，由发布工具生成并注册 schema，不在主流程增加名称分支。', '']
@@ -448,7 +448,8 @@ def main():
             if 'minimum' in v: detail+='；最小值：'+str(v['minimum'])
             lines.append(f"| `{k}` | {typ} | {'是' if required else '否'} | {detail.replace('|','/')} |")
         lines.append('')
-    (ROOT/'field_dictionary.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
+    (ROOT/'docs').mkdir(parents=True, exist_ok=True)
+    (ROOT/'docs/field_dictionary.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
     print(f'Generated {len(core)} core types and {len(CONFIGS)} separately registered extension schemas')
 
 if __name__=='__main__': main()

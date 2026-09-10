@@ -43,7 +43,7 @@ my_dataset/
 
 这个基础模板不要求 `tests/`、`test_contract.py` 或 `cases.jsonl`。本地代码测试按需添加，见第 3.4 节；完整数据集与 ground truth 的发布方式见第 3.3 节。
 
-dataset.yaml 是用户唯一编辑的发布声明。发布工具解析它、构建 wheel，并从 `dataset.yaml.models` 登记的 Python 类型及其嵌套类型自动导出校验 schema；用户不再维护 `schemas/` 目录。工具计算 wheel/schema digest 后组装 PackageManifest 对象，通过 API 发给 Hub。Hub 把该对象作为结构化记录存入数据库，查询时可序列化为 JSON，但不要求生成或保存一个独立的 manifest.json 文件。脚手架默认写入 `internet_access: false`；只有 Environment 确实需要公共互联网时才改为 true，并由发布准入检查。任务怎样创建进程或容器、怎样限制文件和权限，都由平台自动处理，数据集作者无需理解或填写这些设置。用户不重复手写两份等价声明。本次 `reference/generated/packages/*/manifest.json` 只是由 `dataset.yaml` 和 `models.py` 生成的可执行设计夹具，不是产品要求用户维护的文件；`reference/datasets/*` 的作者目录中不保存 manifest。公共基类由系统维护，用户不运行中央 build_contracts.py 来登记新数据集。
+dataset.yaml 是用户唯一编辑的发布声明。发布工具解析它、构建 wheel，并从 `dataset.yaml.models` 登记的 Python 类型及其嵌套类型自动导出校验 schema；用户不再维护 `schemas/` 目录。工具计算 wheel/schema digest 后组装 PackageManifest 对象，通过 API 发给 Hub。Hub 把该对象作为结构化记录存入数据库，查询时可序列化为 JSON，但不要求生成或保存一个独立的 manifest.json 文件。脚手架默认写入 `internet_access: false`；只有 Environment 确实需要公共互联网时才改为 true，并由发布准入检查。任务怎样创建进程或容器、怎样限制文件和权限，都由平台自动处理，数据集作者无需理解或填写这些设置。用户不重复手写两份等价声明。本次 `reference/generated/packages/*/manifest.json` 只是由 `dataset.yaml` 和 `models.py` 生成的可执行设计夹具，不是产品要求用户维护的文件；`reference/datasets/*` 的作者目录中不保存 manifest。公共基类由系统维护，用户不运行中央 scripts/build_contracts.py 来登记新数据集。
 
 `dataset.yaml` 的目标模板如下。`models` 和 `entrypoints` 引用 Python 类，不重复描述字段；本包新增类型放在 `src/<package>/models.py`，已有 SDK 类型直接引用：
 
@@ -169,7 +169,7 @@ tools.py 仅在需要新操作时添加；可以编写带参数/返回类型和�
 
 省略目录不等于省略验证。发布工具应执行通用结构、模型、入口和 Python 安装依赖检查；作者按需要补充针对业务正确性的测试。依赖样本的行为检查从明确提供的样本输入读取，不强制扫描 tests/cases.jsonl。
 
-当前九个参考包的 `tests/cases.jsonl` 确实由 `build_examples.py` 读取，`validate_design.py` 也检查这些参考测试文件。这是设计维护用样例的真实依赖，因此本次只从用户基础模板移除必需项，保留已有参考测试。它们不能被解释为未来产品对所有数据集作者的强制文件要求。
+当前九个参考包的 `tests/cases.jsonl` 确实由 `scripts/build_examples.py` 读取，`scripts/validate_design.py` 也检查这些参考测试文件。这是设计维护用样例的真实依赖，因此本次只从用户基础模板移除必需项，保留已有参考测试。它们不能被解释为未来产品对所有数据集作者的强制文件要求。
 
 ## 4. schema 与 proto 的唯一来源
 

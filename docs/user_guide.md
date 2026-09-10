@@ -184,10 +184,10 @@ QA 选 Docker 也实际使用环境容器；数据集可以引用公共 Python �
 普通数据集作者不运行下面这些脚本，也不修改它们。它们只供 UEnv 设计/核心维护者从 `design` 目录重新生成中央参考契约、内置示例和模块图：
 
 ```text
-python build_contracts.py
-python build_examples.py
-python build_module_map.py
-python validate_design.py
+python scripts/build_contracts.py
+python scripts/build_examples.py
+python scripts/build_module_map.py
+python scripts/validate_design.py
 ```
 
 校验依赖 jsonschema 和 PyYAML 安装于本次 `design/.dependencies`，验证脚本只在当前进程增加该路径。九个 `reference/datasets/<dataset>` 子目录采用完全相同的作者结构：`dataset.yaml`、`pyproject.toml`、`src/<package>/{__init__,models,dataset_adapter,environment,scorer}.py`、`tests/cases.jsonl` 和 `tests/test_contract.py`。需要数据集专用工具时才增加 `tools.py`。

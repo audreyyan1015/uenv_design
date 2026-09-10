@@ -1,6 +1,6 @@
 # UEnv vNext 字段字典
 
-本文件由本地过渡生成器 build_contracts.py 生成。目标生产版本改由 contracts/proto/uenv/v1/*.proto 生成；本文件不是另一处可编辑协议。所有对象默认拒绝未知字段；必填字段没有隐式默认值。run.yaml 展开后的完整 RunSpec 是唯一用户配置输入。
+本文件由本地过渡生成器 scripts/build_contracts.py 生成。目标生产版本改由 contracts/proto/uenv/v1/*.proto 生成；本文件不是另一处可编辑协议。所有对象默认拒绝未知字段；必填字段没有隐式默认值。run.yaml 展开后的完整 RunSpec 是唯一用户配置输入。
 
 嵌套字段的必填是指其父对象已提供时；可选父对象省略时无需补子字段。
 

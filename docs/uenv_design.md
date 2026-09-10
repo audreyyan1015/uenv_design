@@ -296,7 +296,7 @@ DatasetAdapter 位于数据准备阶段，返回 PreparedSample(sample_id, input
 
 EpisodeSupervisor 是 Rust Worker 内唯一的 attempt 生命周期执行器。它创建后端会话、启动/终止 Python host、强制预算和取消、冻结产物、在本 attempt 进入评分时至多调用一次评分、完成首次清理、封存轨迹并保存待上报结果。ComponentHost 和 ScorerHost 只是受管 Python 组件入口，不拥有租约、后端、最终状态或持久化。它们先按对应角色的 package config schema 完整校验 `ComponentSpec.config`，随后只把 `config.data` 作为必填 dict 传给用户类构造函数；基类统一保存为 `self.config`，空配置显式传 `{}`。Environment、AgentRunner、Scorer 是用户扩展对象；用户不实现 Supervisor 或 host。
 
-本地参考位置：[Python 用户接口与数据类型](reference/sdk/src/uenv/sdk/__init__.py)、[Python 类型与 schema 生成](reference/sdk/src/uenv/sdk/modeling.py)、[Rust EpisodeSupervisor](reference-control/src/supervisor.rs)、[Rust 计划解析](reference-control/src/plan.rs)、[Rust 评分补全](reference-control/src/scoring.rs)。本轮修改的是 `design` 参考实现；远端代码和本地 `source` 快照未修改。
+本地参考位置：[Python 用户接口与数据类型](../reference/sdk/src/uenv/sdk/__init__.py)、[Python 类型与 schema 生成](../reference/sdk/src/uenv/sdk/modeling.py)、[Rust EpisodeSupervisor](../reference-control/src/supervisor.rs)、[Rust 计划解析](../reference-control/src/plan.rs)、[Rust 评分补全](../reference-control/src/scoring.rs)。本轮修改的是 `design` 参考实现；远端代码和本地 `source` 快照未修改。
 
 #### 4.0.2 谁继承谁：系统基类与数据集专属类
 
@@ -617,7 +617,7 @@ flowchart LR
 
 轨迹中的 transition 与返回 Agent 的 Transition 内容一致，但必须是独立副本，后续修改不能改变已记录内容。轨迹仍使用既有 TrajectoryEvent 信封保存身份、时间与 kind；不新增转换类、用户日志接口或第二份动作结果字段。
 
-实现范围：三个用户类型和上述四个方法已在参考 SDK 中存在；EnvironmentTransition.transition 已同步到 build_contracts.py、生成 schema、字段字典和 Rust 记录入口。校验拒绝同时保留平铺字段作为第二套来源。
+实现范围：三个用户类型和上述四个方法已在参考 SDK 中存在；EnvironmentTransition.transition 已同步到 scripts/build_contracts.py、生成 schema、字段字典和 Rust 记录入口。校验拒绝同时保留平铺字段作为第二套来源。
 
 “冻结”要求后续评分使用固定内容。本地 Rust 参考在 finalize 后按顺序调用 `ToolHost.freeze()` 和 `Backend.freeze()`，并用 mock 验证评分发生在二者之后；Python 数据对象也做独立复制和部分摘要检查。真实 Backend 仍需实现只读评分视图和不可变产物存储，不能仅凭 dataclass 或方法名认为生产隔离已经完成。
 
@@ -772,7 +772,7 @@ sequenceDiagram
   Note over W,E: Rust Worker 强制处理失败、取消、超时和资源清理
 ```
 
-AgentContext 不是另一个调度服务。它在 Python 中向 Agent 提供 task、observation、step、generate 和工具入口；调用必须进入 Rust `AgentRuntime`，由它在副作用发生前检查取消、截止时间和对应预算。Python 只把框架调用转换成协议，不能直连模型后再补报、不能自行增加次数、延长截止时间或封存轨迹。本地 Rust 参考把受控调用集中在 [AgentRuntime](reference-control/src/runtime.rs)。open、prepare、Agent.run、freeze 以及每次模型/工具/环境/评分调用都接收同一预算派生的当前 remaining_ms。清理固定为 ScorerHost → AgentHost → ToolHost → EnvironmentHost → Backend；`freeze()`、`close()` 都必须幂等，某一步失败也继续尝试后续步骤。close 使用平台固定的清理超时，不能因 episode 预算已耗尽而跳过。
+AgentContext 不是另一个调度服务。它在 Python 中向 Agent 提供 task、observation、step、generate 和工具入口；调用必须进入 Rust `AgentRuntime`，由它在副作用发生前检查取消、截止时间和对应预算。Python 只把框架调用转换成协议，不能直连模型后再补报、不能自行增加次数、延长截止时间或封存轨迹。本地 Rust 参考把受控调用集中在 [AgentRuntime](../reference-control/src/runtime.rs)。open、prepare、Agent.run、freeze 以及每次模型/工具/环境/评分调用都接收同一预算派生的当前 remaining_ms。清理固定为 ScorerHost → AgentHost → ToolHost → EnvironmentHost → Backend；`freeze()`、`close()` 都必须幂等，某一步失败也继续尝试后续步骤。close 使用平台固定的清理超时，不能因 episode 预算已耗尽而跳过。
 
 单轮问答仍调用同一个 Agent.run，只生成一次回答，可以不调用 step。多轮策略由 AgentRunner 决定，Rust Worker 强制公共预算；Supervisor 不再套一层模型决策循环。多轮中的公开反馈来自 Environment.step 的 Observation 或工具结果；这些内容会写入轨迹，但正式 ScoreResult 只在最终 Outcome 冻结后产生一次。
 

@@ -14,7 +14,7 @@ import tempfile
 import time
 import unittest
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / ".dependencies"))
 sys.path.insert(0, str(ROOT / "reference"))
 sys.path.insert(0, str(ROOT / "reference/sdk/src"))
@@ -100,10 +100,10 @@ def score_candidate(scorer, answer, private_data, context=None):
 
 class ContractTests(unittest.TestCase):
     def test_contract_authoring_sources_are_unambiguous(self):
-        template = (ROOT / "dataset_package_template.md").read_text(encoding="utf-8")
-        module_map = (ROOT / "module_map.md").read_text(encoding="utf-8")
-        main_design = (ROOT / "uenv_design.md").read_text(encoding="utf-8")
-        user_guide = (ROOT / "user_guide.md").read_text(encoding="utf-8")
+        template = (ROOT / "docs/dataset_package_template.md").read_text(encoding="utf-8")
+        module_map = (ROOT / "docs/module_map.md").read_text(encoding="utf-8")
+        main_design = (ROOT / "docs/uenv_design.md").read_text(encoding="utf-8")
+        user_guide = (ROOT / "docs/user_guide.md").read_text(encoding="utf-8")
         self.assertNotIn("  schemas/", template)
         self.assertIn("models.py", template)
         self.assertIn("contracts/proto/uenv/v1/", module_map)
@@ -180,8 +180,8 @@ class ContractTests(unittest.TestCase):
                 self.assertFalse((package / "execution_plan.json").exists())
 
     def test_nine_reference_fixtures_use_the_documented_author_layout(self):
-        central_contract_source = (ROOT / "build_contracts.py").read_text(encoding="utf-8")
-        generic_builder_source = (ROOT / "build_examples.py").read_text(encoding="utf-8")
+        central_contract_source = (ROOT / "scripts/build_contracts.py").read_text(encoding="utf-8")
+        generic_builder_source = (ROOT / "scripts/build_examples.py").read_text(encoding="utf-8")
         for package_dir in discover_packages(PACKAGE_ROOT):
             with self.subTest(package=package_dir.name):
                 declaration = load_yaml(package_dir / "dataset.yaml")
