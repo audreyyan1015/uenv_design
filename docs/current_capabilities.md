@@ -79,3 +79,25 @@ Worker 当前也不只是资源启动器。EpisodeExecutor（生产源码 `uenv-
 ## 迁移保护规则
 
 保留现有代码的历史快照和评分语料作为行为对照；不同分数必须明确是修 bug、升级评分政策还是迁移错误。任何旧模块只有在其功能迁入新路径并有替代验收后才删除。实验目录可以保留 baseline，但不能从产品 API 隐式进入实验路径。本文不把任何尚未执行的迁移或测试标成完成。
+
+## 语言分布与源文件依据
+
+2026-09-07 再次只读核对远端提交 `af675b20b91c66672b0517b378205603fe424bf3`，工作区干净。Rust 与 Python 文件数量不能直接表示职责；例如 `uenv-server` 中的 Python 文件主要是压力测试和报告脚本，在线服务本身仍是 Rust。因此以下按实际调用职责分类，不用易受生成文件或统计范围影响的文件数作架构依据。
+
+| 现有部分 | 当前实现 | 目标语言与处置 |
+|---|---|---|
+| Bridge | Python 负责 VeRL 等框架适配；`uenv-bridge/core` 的 Rust 服务负责批次流、并发和背压 | 框架适配和用户 API 保持 Python。Rust Core 中有价值的批次、流控和校验逻辑保留在 Rust，可并入 Server 公共 RPC；不重写成 Python |
+| Server | 请求处理、调度、AgentJob/Agent 池、状态、持久化、轨迹接收均为 Rust | 保持 Rust；删除按 env_type 和 Agent 池分流，重组为统一计划、租约和终态链路 |
+| Worker | 主执行器、控制面、Process/Podman、插件进程、SWE session、评分适配和轨迹上传主要为 Rust | 保持 Rust 作为执行控制面；将数据集分支改为通用组件调用，不把生命周期迁到 Python |
+| Hub | API、数据库、版本、manifest、schema 校验、包文件处理主要为 Rust | 保持 Rust；整理通用包和数据版本模型 |
+| 数学/问答评分 | GSM8K、PubMedQA、SciTab、OlymMATH 的规则当前位于 Rust `plugins/math` | 评分政策迁为用户可读的 Python Scorer；调用时机、隔离、超时和结果校验仍由 Rust Worker 负责 |
+| DSCodeBench | Rust 插件负责提取、启动和 reward 组织，实际代码评测脚本为 Python | 数据集提取和结果解释迁入 Python Scorer；进程/容器执行、超时和回收保留在 Rust Backend/HarnessExecutor |
+| SWE | Worker 的 session、grader、容器和轨迹大多是 Rust；官方评测包装和 OpenHands 是 Python | 数据集 Environment/Scorer 和 OpenHandsAdapter 使用 Python；仓库工作区、容器、命令控制、测试执行和清理使用 Rust |
+| Agent | OpenHands 和 VeRL agent loop 为 Python；Server 的 AgentJob/池调度为 Rust | AgentRunner 保持 Python；旧 Agent 池/AgentJob 专用调度退役，Rust Worker 直接监管本次 Agent 进程 |
+| Backend | 通用 Process/Podman 及 SWE 容器驱动为 Rust | Process/Docker/Podman 统一为 Rust trait 实现；数据集不得实现或替换后端 |
+| 轨迹 | Worker/Server 的落盘、上传和查询主要为 Rust；Python 生成模型与 Agent 事件 | Python 只上报真实事件内容，Rust 分配顺序、验证身份、封存、持久化、重传和回收 |
+| 公共协议 | Proto 同时生成 Rust/Python 类型，业务 JSON 仍有多处手写转换 | Schema/Proto 是唯一字段来源，生成 Rust/Python 类型；Server/Worker 的 Rust 边界做权威校验，Python SDK也做提前校验 |
+
+源码依据：Rust Bridge 批次与背压（生产源码 `uenv-bridge/core/src/service.rs:31`）、Rust Server 数据集分流（生产源码 `uenv-server/src/execution_backend.rs:57`）、Rust Worker 主执行器（生产源码 `uenv-worker/src/episode/executor.rs:210`）、Rust Process/Podman 后端接口（生产源码 `uenv-worker/src/backend/mod.rs:11`）、Rust 数学评分（生产源码 `plugins/math/src/score.rs:5`）、Rust 调用 Python 代码评测（生产源码 `plugins/code/src/backends/dscodebench/executor.rs:61`）、Python OpenHands 适配（生产源码 `integrations/openhands/run_swebenchpro_official.py:645`）、Rust 轨迹上传（生产源码 `uenv-worker/src/swe/trajectory_upload.rs:90`）、Rust Hub 包管理（生产源码 `uenv-hub/uenv-hub-core/src/package.rs:385`）。
+
+判断标准很简单：用户需要经常修改的任务规则用 Python；涉及权限、进程、容器、并发、超时、取消、租约、持久化和不可变记录的系统规则用 Rust。这样既保留用户友好性，也避免 Python 扩展绕过平台约束。

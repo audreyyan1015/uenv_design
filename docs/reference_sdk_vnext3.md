@@ -9,7 +9,7 @@
 | Rust `reference-control` | 计划解析、组件锁定、镜像解析、预算、后端生命周期、模型和工具入口、轨迹、每个已进入评分的 attempt 至多一次评分、清理、EpisodeResult | 数据集评分规则、Agent 推理循环、Environment 业务 |
 | Python `reference/sdk/src/uenv/sdk/` | Adapter、Environment、AgentRunner、Scorer、ToolExecutor、UEnvModel 与包 schema 生成 | 调度、后端、权威预算、轨迹封存、结果提交 |
 | Python `reference/datasets/` | 九个数据集各自的 Adapter、Environment、Scorer | 选择 Agent、Backend、模型或本次工具表 |
-| Python `build_*.py` 与 `reference/fixture_plan.py` | 当前本地参考的过渡生成器，生成文档、schema 和稳定示例 | 生产协议定义或运行时决策 |
+| Python `scripts/build_*.py` 与 `reference/fixture_plan.py` | 当前本地参考的过渡生成器，生成文档、schema 和稳定示例 | 生产协议定义或运行时决策 |
 
 系统控制逻辑不再通过 Python `EpisodeRuntime` 模拟。`reference/fixture_plan.py` 只生成静态示例；每个示例随后由 Rust `PlanResolver` 重建并比较，防止生成器成为第二套运行时规则。
 
@@ -149,3 +149,209 @@ Backend.open、各 Host.prepare、AgentHost.run_agent、ToolHost/Backend.freeze�
 尚未实现真实网络 RPC、完整 Rust JSON Schema validator、lease/replay、持久 attempt 账本、持久轨迹 spool、durable outbox、启动恢复、进程强制中断、Docker/Podman/Process 驱动、真实 OpenHands/MCP 接入、官方 benchmark 差分和分布式恢复。参考代码通过 trait 和内存 mock 明确了部分端口，但 mock 通过不能当作生产验收。
 
 公开运行示例不填写 schema_version，expand_run 在提交边界生成内部标记。该夹具辅助函数当前一次接收一份包 manifest，Environment/Scorer 选择不匹配时明确拒绝；生产提交端须分别按两个已选角色查询目录，Rust PlanResolver 已分别解析角色，不受夹具限制。
+
+## 8. 实现状态与待决事项
+
+主设计定义目标行为；本节集中说明实际参考范围。源码基线见能力清单，具体测试结果仅由 verification.md 维护。下表的“待决策”意味着还缺接口或方案，“待验证”意味着已有目标但还不能据此宣称可用。
+
+| 主题 | 已有参考 | 待完成或待决策 | 验证方式 |
+|---|---|---|---|
+| 公共协议 | scripts/build_contracts.py 生成本地 JSON Schema；Python models.py 生成包 schema | 待实施：统一 proto 及 Rust/Python/RPC 生成链 | 契约生成、跨语言往返及真实 RPC 校验 |
+| 执行控制 | Rust Supervisor/AgentRuntime 通过 mock 端口验证顺序、预算和计数 | 待实施：受管进程、IPC、真正的强制取消与完整边界校验 | 使用真实组件进程验证结束、超时、取消和迟到调用 |
+| 调度与恢复 | 数据结构和部分形状、摘要检查 | 待实施：真实 lease/replay 校验、持久事务、spool/outbox 和重启恢复 | 断连、进程退出、重复派发和迟到结果故障测试 |
+| Backend 与私有评分 | 镜像优先级和回调协议；模拟 freeze/close | 待验证：Process/Docker/Podman 驱动、固定隔离底线、候选只读视图和真实镜像兼容性 | 按后端验证工作区、访问控制、评分依赖与清理 |
+| Agent 与工具 | 公共接口、接口匹配和工具表核验；PlainAgent 示例仅无工具单轮 | 待实施：Python 函数包装、MCP 生命周期、OpenHands 原生工具及有状态行为接入 | 对同一工具验证直接接口与 MCP 的真实状态、结果和事件 |
+| Hub 数据服务 | 包声明加载、schema 和模拟文件引用 | 待决策：数据发布/样本选择/文件授权 API 的完整请求结构；待实施：索引、缓存和保留期 | 同一条样本分别由本地与 Hub 准备，比较请求与结果；测试冲突、缺失和权限 |
+| 动态工具 | 固定工具表协议 | 当前不支持；待决策：授权来源、发现过程及工具表版本协议 | 明确协议前拒绝运行中增加工具 |
+| 通用性 | 九个合成数据集包及有状态接口示例 | 待验证：真实多轮、多模态、无参考答案、代码 harness 与 OpenHands 全链路 | 保留真实 Agent、工具、环境，仅替换模型端点做模拟 |
+
+Python 构造的数据副本、schema 校验或 mock.freeze() 均不能证明进程隔离已经实现。Worker 的真实网络与文件授权、完整 RPC 字段验证和不可变产物保存是上线前要求。
+
+原主文档中的本地执行入口记录统一归入本节：参考执行器接收 DispatchRequest，配置来自 ExecutionPlan；真实持久派发授权与恢复账本仍需接入。旧日期下的测试数量不作为当前统计，最新记录见 [验证结果](verification.md)。
+
+## 9. 系统接口接入目标
+
+本节面向实现 Worker/IPC 的维护者。下面的类图和时序图描述目标接线；本地 Rust 只以端口和 mock 验证其中的部分调用约束，不能据图推断真实组件进程、MCP 或 OpenHands 已经接通。
+
+### 9.1 组件进程与用户扩展对象
+
+先只看数据集接入直接相关的核心关系。图中方法省略 context 等参数以便阅读；准确签名见参考 SDK。标为 abstract 的类是用户扩展接口。
+
+```mermaid
+classDiagram
+  direction TB
+  class DatasetAdapter {
+    <<abstract>>
+    +normalize(record) PreparedSample
+  }
+  class PreparedSample {
+    +sample_id
+    +input
+    +private_data optional
+    +runtime optional
+  }
+  class EpisodeSupervisor {
+    <<Rust system component>>
+    +execute(dispatch) EpisodeResult
+  }
+  class ComponentHostProcess {
+    <<Rust process controller>>
+    +start(role, component, scoped_context)
+    +close()
+  }
+  class ComponentHost {
+    <<managed Python process>>
+    +load(role, component)
+    +invoke(role_method)
+  }
+  class ScorerHost {
+    <<managed Python host>>
+    +score(input) ScoreResult
+  }
+  class Environment {
+    <<abstract>>
+    +reset(task, context) Observation
+    +step(action, context) Transition
+    +finalize(outcome, context) Outcome
+    +close(context)
+  }
+  class AgentRunner {
+    <<abstract>>
+    +run(context) Outcome
+  }
+  class Scorer {
+    <<abstract>>
+    +score(input, context) ScoreResult
+  }
+  DatasetAdapter ..> PreparedSample : returns
+  EpisodeSupervisor ..> ComponentHostProcess : starts role-scoped instances
+  ComponentHostProcess ..> ComponentHost : supervises
+  EpisodeSupervisor ..> ScorerHost : invokes once after freeze
+  ComponentHost ..> Environment : reset / step / finalize / close
+  ComponentHost ..> AgentRunner : run once
+  ScorerHost ..> Scorer : score
+```
+
+图例：虚线箭头 `..>` 表示调用或使用，不表示继承；箭头标签 run once 指一次 attempt 中只调用一次 Agent.run，内部可以发起多次 generation。`ComponentHostProcess` 是一种基础设施实现，按 role 启动 Agent 与 Environment/沙箱工具两个权限隔离的实例，不是两个用户接口。这里没有一个包揽所有职责的 Dataset 父类。
+
+DatasetAdapter 位于数据准备阶段，返回 PreparedSample(sample_id, input, private_data, runtime)。作者侧的 input 与 private_data 使用 `UEnvModel`；prepare 根据入口类型和固定包版本自动封装为内部 TypedConfig，再用 input 构建公开 TaskSpec，与可选 private_data 配对写入 EpisodeRequest，不再生成和读取额外的私有材料包装文件。Worker 执行时不再转换原始数据。
+
+EpisodeSupervisor 是 Rust Worker 内唯一的 attempt 生命周期执行器。它创建后端会话、启动/终止 Python host、强制预算和取消、冻结产物、在本 attempt 进入评分时至多调用一次评分、完成首次清理、封存轨迹并保存待上报结果。ComponentHost 和 ScorerHost 只是受管 Python 组件入口，不拥有租约、后端、最终状态或持久化。它们先按对应角色的 package config schema 完整校验 `ComponentSpec.config`，随后只把 `config.data` 作为必填 dict 传给用户类构造函数；基类统一保存为 `self.config`，空配置显式传 `{}`。Environment、AgentRunner、Scorer 是用户扩展对象；用户不实现 Supervisor 或 host。
+
+### 9.2 Worker 内部多轮调用时序
+
+下面使用有状态环境说明 step 的位置。工具与沙箱路径下一小节单独画。
+
+```mermaid
+sequenceDiagram
+  participant W as Rust EpisodeSupervisor
+  participant R as Rust AgentRuntime
+  participant B as Rust Backend
+  participant T as Rust ToolHost
+  participant H as Python Agent Host
+  participant E as Python Environment Host
+  participant A as AgentRunner
+  participant C as AgentContext 受控回调
+  participant M as ModelProvider / 模型端点
+  participant P as Python ScorerHost
+  participant S as Scorer
+  W->>B: open(plan.backend, runtime, internet_access)
+  W->>E: prepare(plan.environment, session, remaining_ms)
+  W->>T: prepare(plan.tools, session, remaining_ms)
+  T-->>W: 实际可路由工具；与 plan.tools 核验
+  W->>H: prepare(plan.agent, plan.tools, remaining_ms)
+  H-->>W: 实际模型可见工具；与 plan.tools 核验
+  W->>R: 创建累计预算
+  W->>E: reset(TaskSpec, context)
+  E-->>W: Observation
+  H->>A: run(AgentContext)
+  loop Agent 内部交互循环
+    A->>C: generate(messages)
+    C->>R: 请求受控生成
+    R->>R: 检查取消并预占 generation/token 预算
+    R->>M: 使用 ExecutionPlan.model 请求生成
+    M-->>R: 原始 GenerationEvent
+    R->>R: 校验、结算并写 generation 事件
+    R-->>C: 已记录的生成结果
+    C-->>A: 生成结果
+    opt 请求环境动作
+      A->>C: step(action)
+      C->>R: 请求受控环境动作
+      R->>R: 检查取消并预占 environment_step
+      R->>E: step(action, context)
+      E-->>R: Transition
+      R->>R: 注入 step index、校验并写事件
+      R-->>C: 已记录的 Transition
+      C-->>A: Transition
+    end
+  end
+  A-->>H: Outcome
+  H-->>W: 候选 Outcome
+  W->>E: finalize(Outcome, context)
+  E-->>W: 最终 Outcome
+  W->>T: freeze，拒绝后续工具请求
+  W->>B: freeze，固定只读评分视图
+  W->>W: 保存评分快照
+  W->>P: ScoreInput 与私有材料授权
+  P->>S: score(ScoreInput, context)
+  S-->>P: ScoreResult（业务字段）
+  P-->>W: ScoreResult（业务字段）
+  W->>W: 补全系统字段并写 score 事件
+  W->>P: close Scorer Host
+  W->>H: close Agent Host
+  W->>T: close ToolHost
+  W->>E: close Environment Host
+  W->>B: close Backend session
+  W->>W: 写清理结果和 terminal，再封存最终轨迹
+  Note over W,E: Rust Worker 强制处理失败、取消、超时和资源清理
+```
+
+AgentContext 不是另一个调度服务。它在 Python 中向 Agent 提供 task、observation、step、generate 和工具入口；调用必须进入 Rust `AgentRuntime`，由它在副作用发生前检查取消、截止时间和对应预算。Python 只把框架调用转换成协议，不能直连模型后再补报、不能自行增加次数、延长截止时间或封存轨迹。本地 Rust 参考把受控调用集中在 [AgentRuntime](../reference-control/src/runtime.rs)。open、prepare、Agent.run、freeze 以及每次模型/工具/环境/评分调用都接收同一预算派生的当前 remaining_ms。清理固定为 ScorerHost → AgentHost → ToolHost → EnvironmentHost → Backend；`freeze()`、`close()` 都必须幂等，某一步失败也继续尝试后续步骤。close 使用平台固定的清理超时，不能因 episode 预算已耗尽而跳过。
+
+单轮问答仍调用同一个 Agent.run，只生成一次回答，可以不调用 step。多轮策略由 AgentRunner 决定，Rust Worker 强制公共预算；Supervisor 不再套一层模型决策循环。多轮中的公开反馈来自 Environment.step 的 Observation 或工具结果；这些内容会写入轨迹，但正式 ScoreResult 只在最终 Outcome 冻结后产生一次。
+
+### 9.3 工具路由与资源端口
+
+这一张是目标逻辑依赖图。用户扩展是 Python，准入和资源控制是 Rust；跨进程通过生成协议通信。`ToolHost` 是 Rust 内部端口，`ToolGateway` 是它的实现，不是新的部署进程。普通 Python ToolExecutor 与 Environment 使用同一个 sandbox 角色 host；Agent 原生会话工具留在 Agent host。ToolGateway 只按唯一 `ExecutionPlan.tools` 选择路由，Backend 只提供本次 session。本地 Rust 参考已实现受控模型/工具入口，真实 IPC 接线和 OpenHands 适配器仍未实现。
+
+```mermaid
+classDiagram
+  direction LR
+  class AgentRunner {
+    <<abstract>>
+  }
+  class ToolGateway {
+    <<Rust ToolHost implementation>>
+    +prepare(tools, session, remaining_ms) routable_tools
+    +execute(binding, arguments) ToolResult
+    +freeze(remaining_ms)
+    +close()
+  }
+  class ToolExecutor {
+    <<abstract>>
+    +execute(arguments, context) dict
+  }
+  class ReadFileTool
+  class BackendSession {
+    <<planned>>
+    +read_file(path)
+    +execute(request)
+  }
+  class Backend {
+    <<Rust trait>>
+    +open(backend, runtime, internet_access, remaining_ms)
+    +execute(request)
+    +read_file(session_id, path)
+    +freeze(remaining_ms)
+    +close()
+  }
+  AgentRunner ..> ToolGateway : through Python SDK adapter
+  ToolGateway ..> ToolExecutor : invokes through role-scoped ComponentHost
+  ToolExecutor <|-- ReadFileTool
+  ReadFileTool ..> BackendSession : context.session.read_file
+  BackendSession ..> Backend : delegates through Worker
+```
+
+工具不是 Agent 的父类，Backend 也不是 Environment 的父类。它们通过受控接口组合：Agent 决定调用，工具完成操作，后端提供资源能力。ProcessBackend、DockerBackend、PodmanBackend 在 Worker 侧实现统一后端协议；这不意味着 Python ABC 的继承关系可以直接跨语言执行。ToolHost 返回“能否路由”，AgentHost 返回“模型能否看见”；Supervisor 把两者分别与唯一 `ExecutionPlan.tools` 核对，返回值不成为第二份工具配置。
+
+状态环境的动作工具可以调用 AgentContext.step；文件工具通过 session 操作文件。一次动作只执行一次，不能先由文件工具修改，再让 Environment.step 重复修改。只操作 SDK 会话状态的原生工具无需经过任务 Backend，但仍遵守工具选择、平台安全底线、计数和记录。工具使用规则见[主设计第 6.4 节](uenv_design.md#64-工具定义接入与调用)。

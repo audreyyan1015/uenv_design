@@ -8,7 +8,7 @@
 
 TaskSpec、PackageManifest 由准备和发布工具根据上述输入生成；EpisodeRequest、ExecutionPlan、episode_id、attempt_id、lease、input_digest、plan_digest 等属于系统内部协议。普通用户的模板、默认 CLI 输出和入门手册不展示这些内部字段，也不要求用户填写。核心维护文档仍完整定义它们，以便实现 Server、Worker、恢复和审计。
 
-样本有两种输入方式：用户提供原始/标准化数据，或指定 Hub 的数据 id/revision/split/subset 与 sample_id/样本范围。两者在 prepare/Bridge 准备入口统一，不能同时提供 Hub 引用和另一份样本内容让系统合并。默认标准化文件是 UTF-8 JSONL，每行只保存 task 和可选 private_data，不保存运行配置；含评分材料的文件不交给 Agent。Hub 的存储内容、文件格式与 Worker 读取规则统一见 [第 3.4 节](uenv_design.md#34-hub-与数据存储规范)，当前实现差异见第 13.2 节。
+样本有两种输入方式：用户提供原始/标准化数据，或指定 Hub 的数据 id/revision/split/subset 与 sample_id/样本范围。两者在 prepare/Bridge 准备入口统一，不能同时提供 Hub 引用和另一份样本内容让系统合并。默认标准化文件是 UTF-8 JSONL，每行只保存 task 和可选 private_data，不保存运行配置；含评分材料的文件不交给 Agent。Hub 的存储内容、文件格式与 Worker 读取规则统一见 [主设计第 9 章](uenv_design.md#9-hub代码包与数据存储)，当前实现差异见[Hub 迁移说明](source_refactoring_plan.md#114-hub-与数据输入迁移)。
 
 ## 2. 新增数据集需要哪些文件
 
@@ -147,7 +147,7 @@ DSCodeBench/SWE Scorer 通过 `ScoringContext.run_harness()` 请求 Worker 在�
 
 运行用户在 RunSpec.tools 选择工具及配置，不填写 adapter。PlanResolver 按 AgentManifest.supported_interfaces 的顺序，从 ToolSpec.interfaces 选择第一个共同接口，再锁定 interface/adapter。UEnv 据此直接注册或包装成 MCP；自定义 Agent 不逐个适配工具。Agent 自带工具也发布为 ToolSpec 并进入同一列表，由 UEnv 限制执行并记录参数和结果。选择工具只开放该工具接口，不会开放任意网络或宿主目录。
 
-代码示例和调用图统一见 [工具设计第 4.2 节](uenv_design.md#42-工具怎么写怎么用怎么管)。上述为目标用法；当前参考格式、尚未实现的接口和验收要求集中见 [迁移说明第 13.1 节](uenv_design.md#131-工具调用迁移说明)。
+代码示例和调用图统一见 [工具设计第 6.4 节](uenv_design.md#64-工具定义接入与调用)。上述为目标用法；当前参考格式、尚未实现的接口和验收要求集中见 [迁移说明第 11.3 节](source_refactoring_plan.md#113-工具接入与验收)。
 
 ## 8. 指定后端和智能体
 
@@ -175,7 +175,7 @@ uenv run --tasks tasks.jsonl --config run.yaml
 
 优先级为 **用户覆盖 > 样本镜像 > 数据集默认镜像**。缺镜像报错，显式覆盖不兼容也报错，不自动回退。同一个 RunSpec 下可以有不同样本镜像，最终结果分别写入各自 ExecutionPlan，不改写共享 RunSpec。选择 Process 时使用本机 runtime_profile，不能同时显式设置 image。
 
-QA 选 Docker 也实际使用环境容器；数据集可以引用公共 Python 运行镜像，无需单独构建。SWE 的实例镜像由 Adapter 从源字段转换，用户通常不需要逐条填写。目标字段片段与兼容性要求见 [主方案第 6.2—6.6 节](uenv_design.md)。
+QA 选 Docker 也实际使用环境容器；数据集可以引用公共 Python 运行镜像，无需单独构建。SWE 的实例镜像由 Adapter 从源字段转换，用户通常不需要逐条填写。目标字段片段与兼容性要求见 [主方案第 7 章](uenv_design.md)。
 
 本地 schema 和九个示例已统一使用 runtime.image，旧 backend.config.data.image 被拒绝。每个数据集对应的 `reference/generated/episodes/<dataset>/execution_plan.json` 展示最终生效配置，Rust `PlanResolver` 验证优先级与冲突；Python `fixture_plan.py` 只生成稳定示例，不执行真实镜像拉取或容器创建。样本镜像由 Adapter 返回 PreparedSample.runtime，再由 prepare 写入 TaskSpec.runtime。
 
@@ -230,4 +230,4 @@ Environment 只写任务规则，Backend 只决定任务在哪里运行。二者
 
 Runtime 自动记录每次动作。目标轨迹内容为 environment_step_index、observation_before、action、transition，其中 transition 直接保存已经校验的 Transition 副本。读取动作后观测使用 payload.transition.observation，结束标志和环境奖励也从该 transition 读取；不在轨迹顶层再保存同一组字段。
 
-当前生成 schema 和 Rust 参考都已经使用嵌套 `transition`，不再接受平铺的动作后字段。三个用户返回类型和方法无需额外变化；读轨迹的程序只按当前协议读取，不同时猜测两套字段。完整的事件类型、写入、封存、上传和读取规则见[主设计 4.3 节](uenv_design.md#43-轨迹谁记录记录什么如何保存)。
+当前生成 schema 和 Rust 参考都已经使用嵌套 `transition`，不再接受平铺的动作后字段。三个用户返回类型和方法无需额外变化；读轨迹的程序只按当前协议读取，不同时猜测两套字段。完整的事件类型、写入、封存、上传和读取规则见[主设计 8.3 节](uenv_design.md#83-统一轨迹事件与交互记录)。

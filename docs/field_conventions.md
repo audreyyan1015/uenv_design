@@ -100,7 +100,7 @@ PackageManifest.provided_tools 只登记包能够提供的 ToolSpec；RunSpec.to
 
 ## 2. 业务与结果
 
-Hub 数据格式目标见主方案第 3.4 节：标准化 JSONL 行复用 task: TaskSpec 与可选 private_data: TypedConfig，身份仍在 task.dataset/sample_id；不另加 data_id 或重复顶层 dataset 字段。数据 revision 与代码包 version 分开，一次样本输入只选择本地内容或 Hub 固定版本之一，在 prepare/Bridge 准备阶段解析后使用同一 EpisodeRequest。运行配置不写入数据行。行格式和 Hub 数据 API 校验尚待迁移，当前状态集中见第 13.2 节。
+Hub 数据格式目标见主方案第 9 章：标准化 JSONL 行复用 task: TaskSpec 与可选 private_data: TypedConfig，身份仍在 task.dataset/sample_id；不另加 data_id 或重复顶层 dataset 字段。数据 revision 与代码包 version 分开，一次样本输入只选择本地内容或 Hub 固定版本之一，在 prepare/Bridge 准备阶段解析后使用同一 EpisodeRequest。运行配置不写入数据行。行格式和 Hub 数据 API 校验尚待迁移，当前状态集中见[Hub 迁移说明](source_refactoring_plan.md#114-hub-与数据输入迁移)。
 
 | 概念 | 规范名 | 处理旧字段 |
 |---|---|---|

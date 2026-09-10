@@ -87,7 +87,7 @@ required_capabilities: []
 
 Python 库依赖只在 `pyproject.toml` 声明，由 Python 包管理器安装；数据集声明、PackageManifest 和 ExecutionPlan 不再维护额外的 UEnv 组件依赖列表。运行组件通过既有角色字段、工具适配器字段和 harness 字段明确指定，并在这些位置锁定版本。
 
-空数组表示没有对应需求，不触发额外操作。镜像 `runtime.image` 等按需字段不塞入基础示例；添加时必须从公共契约引用完整类型，并按同样四列展开子字段。镜像选择和消费规则见主方案第 6.2—6.6 节。
+空数组表示没有对应需求，不触发额外操作。镜像 `runtime.image` 等按需字段不塞入基础示例；添加时必须从公共契约引用完整类型，并按同样四列展开子字段。镜像选择和消费规则见主方案第 7 章。
 
 本地参考已实现类导入、模型/schema 绑定和 Rust 组件版本核验；完整 Hub 发布、Worker 动态 host 加载、调度及真实网络控制仍属待实现或待集成范围。验收必须检查实际消费路径，不能只检查字段通过 schema 校验。
 
@@ -266,7 +266,7 @@ Environment.step 是否需要覆盖取决于交互规则；公共接口的存在
 - 类型只定义一次：核心系统类型来自 proto；数据集新增字段来自本包 models.py；发布生成物不手改。
 - 通用性由 Observation、Transition、Outcome、ScoreInput 等完整协议保证，不把所有输入都压成字符串。
 - 个别数据集的初始化、测试准备、评分差异仍在其专属类实现，不为了少代码而隐藏在 Worker 分支。
-- Agent、backend、model 和工具选择保持在运行配置；镜像默认/样本专用/用户覆盖规则见主方案第 6.2—6.6 节，runtime 字段已进入参考 schema 和示例。
+- Agent、backend、model 和工具选择保持在运行配置；镜像默认/样本专用/用户覆盖规则见主方案第 7 章，runtime 字段已进入参考 schema 和示例。
 - internet_access 属于 Environment 运行要求，脚手架默认 false；它不进入 TaskSpec 或 RunSpec，Backend 只执行 Server 已锁定的 ExecutionPlan 值。
 
 QA 的 Environment 直接实现 reset 来呈现题目，不增加问答中间基类；单轮 Agent 返回最终回答，无需通过环境 step 提交答案。重复逻辑按需提取为公共函数或通过组合调用。DSCodeBench、SWE 的仓库和测试流程不能仅因接口相同就复用问答行为；实际共享部分应提取为代码/仓库公共模块，再由专属 Environment 调用。为兼容新任务增加通用平台能力可以评审，但不应新增数据集名字分支。
@@ -282,3 +282,89 @@ QA 的 Environment 直接实现 reset 来呈现题目，不增加问答中间基
 7. 精简后的 dataset.yaml 经过同一个加载器、发布转换和契约校验；参考加载器、九个示例包和生成 manifest 必须同步。
 
 本次本地验证检查上述类声明、模块归属、继承、具体可实例化状态和入口一致性。现有合成样例与测试替身不构成官方 benchmark、真实 Docker/Process 或 OpenHands 集成验收；没有修改远端生产代码。
+
+## 9. 内置数据集的继承关系
+
+每个数据集都有自己的 Adapter、Environment、Scorer。下面按职责分别画出九个数据集的全部入口，不能把某一张图中的一个数据集类理解为其他数据集共用的入口。空心三角箭头 `<|--` 指向父类。
+
+**Adapter：九个数据集分别继承 DatasetAdapter。**
+
+```mermaid
+classDiagram
+  direction LR
+  class DatasetAdapter {
+    <<abstract>>
+  }
+  DatasetAdapter <|-- Gsm8kAdapter
+  DatasetAdapter <|-- PubmedqaAdapter
+  DatasetAdapter <|-- ScitabAdapter
+  DatasetAdapter <|-- OlymmathAdapter
+  DatasetAdapter <|-- DscodebenchAdapter
+  DatasetAdapter <|-- SweVerifiedAdapter
+  DatasetAdapter <|-- SweLiteAdapter
+  DatasetAdapter <|-- SweProAdapter
+  DatasetAdapter <|-- SweSmithAdapter
+```
+
+**Environment：九个数据集直接继承 Environment。**
+
+```mermaid
+classDiagram
+  direction LR
+  class Environment {
+    <<abstract>>
+  }
+  Environment <|-- Gsm8kEnvironment
+  Environment <|-- PubmedqaEnvironment
+  Environment <|-- ScitabEnvironment
+  Environment <|-- OlymmathEnvironment
+  Environment <|-- DscodebenchEnvironment
+  Environment <|-- SweVerifiedEnvironment
+  Environment <|-- SweLiteEnvironment
+  Environment <|-- SweProEnvironment
+  Environment <|-- SweSmithEnvironment
+```
+
+不再增加问答专用的中间 Environment 基类。各数据集在 reset 中构造自己的初始 Observation；普通问答由 AgentRunner 返回最终回答，无需实现 step。有状态任务按需实现 step、state_snapshot、finalize、close。每个 Environment 都得到所选 Backend 已创建的必填 session；问答 Environment 可以不使用它，但系统不以 `session=None` 暗中形成“无后端”旁路。重复的格式化、文件操作等可以复用公共函数或通过组合调用组件，不能把问答行为移入 Environment 基类成为所有任务的默认行为。
+
+**Scorer：九个数据集直接继承 Scorer。**
+
+```mermaid
+classDiagram
+  direction LR
+  class Scorer {
+    <<abstract>>
+    +score(request, context) ScoreResult
+  }
+  Scorer <|-- Gsm8kScorer
+  Scorer <|-- PubmedqaScorer
+  Scorer <|-- ScitabScorer
+  Scorer <|-- OlymmathScorer
+  Scorer <|-- DscodebenchScorer
+  Scorer <|-- SweVerifiedScorer
+  Scorer <|-- SweLiteScorer
+  Scorer <|-- SweProScorer
+  Scorer <|-- SweSmithScorer
+```
+
+所有数据集 Scorer 均直接继承 Scorer，统一实现 score(request, context) -> ScoreResult；不设文本或测试执行中间评分基类，也不继承其他数据集的 Scorer。文本提取、答案比较、测试执行和报告转换通过公共函数或组合组件复用，一个评分器可以组合多种评分方式。
+
+当前参考代码中，文本评分器调用 `read_reference_text` 与 `uenv_reference_rules` 包中的规则函数；代码/SWE 评分器调用 `evaluate_harness`，由 ScoringContext 提供受控测试执行能力。每个进入评分的 attempt 由 Rust `run_score` 至多调用一次 `Scorer.score`，不按数据集、评测或训练分支。一个 RunSpec 只选择一个 Scorer；升级规则时发布新的组件版本并创建新的 run，不能让评测端和训练端各选一套评分配置。
+
+**Agent 独立于数据集，按运行参数选择。**
+
+```mermaid
+classDiagram
+  class AgentRunner {
+    <<abstract>>
+  }
+  class OpenHandsAdapter {
+    <<planned>>
+  }
+  AgentRunner <|-- PlainAgent
+  AgentRunner <|-- OpenHandsAdapter
+```
+
+OpenHandsAdapter 是待接入统一接口的 Agent 包装类，不是 DatasetAdapter，也不表示现有 SDK 已经继承 UEnv AgentRunner。CounterEnvironment 和 ProgressScorer 是额外的本地有状态测试示例，分别直接继承 Environment 和 Scorer，不属于上述九个数据集入口。
+
+manifest 必须指向本包实际声明的三个类。仅导入公共类并改名不算专属类；Adapter、Environment、Scorer 分别实现 normalize、reset、score，方法体可以调用共享函数。

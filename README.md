@@ -38,7 +38,7 @@ design/
 
 | 文档 | 内容 |
 |---|---|
-| [完整 UEnv 设计方案](docs/uenv_design.md) | 系统边界、完整流程、类图、后端、工具、评分、Hub、恢复和迁移 |
+| [完整 UEnv 设计方案](docs/uenv_design.md) | 按目标、用户输入输出、部署、执行流程、数据、扩展、后端、评分轨迹、Hub、恢复组织的十章主方案 |
 | [当前功能与处置清单](docs/current_capabilities.md) | 基于当前源码判断保留、修改、重写与删除 |
 | [源码重构计划](docs/source_refactoring_plan.md) | 从当前源码迁移到目标架构的阶段、保护措施、回退和删除条件 |
 | [目标代码组织](docs/module_map.md) | Bridge、Server、Worker、Python 组件 host、SDK、Hub 的逐文件职责 |
@@ -47,7 +47,7 @@ design/
 | [字段统一规则](docs/field_conventions.md) | 字段命名、归属、转换和校验边界 |
 | [用户手册与模板](docs/user_guide.md) | 新增数据集、自定义 Agent 和工具 |
 | [数据集统一包模板](docs/dataset_package_template.md) | 所有数据集使用同一包结构，并声明自己的 Adapter、Environment、Scorer 三个职责入口 |
-| [参考实现说明](docs/reference_sdk_vnext3.md) | Rust 控制参考与 Python 扩展参考的代码边界 |
+| [参考实现说明](docs/reference_sdk_vnext3.md) | 参考实现边界、待决事项与内部进程接入图 |
 | [验证结果](docs/verification.md) | 已验证内容与未验证边界 |
 | [逐条问题答复](docs/responses.md) | 前期问题的简明答复 |
 
