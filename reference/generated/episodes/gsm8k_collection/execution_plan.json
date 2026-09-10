@@ -1,35 +1,26 @@
 {
-  "run_id": "demo-pubmedqa",
-  "episode_id": "episode-pubmedqa",
+  "run_id": "demo-gsm8k_collection",
+  "episode_id": "episode-gsm8k_collection",
   "task": {
     "schema_version": "vnext.3",
-    "task_id": "pubmedqa/demo-pubmedqa",
+    "task_id": "gsm8k/demo-gsm8k",
     "dataset": {
-      "id": "pubmedqa",
+      "id": "gsm8k",
       "revision": "synthetic-design-fixture-v1",
       "split": "example",
       "subset": ""
     },
-    "sample_id": "demo-pubmedqa",
+    "sample_id": "demo-gsm8k",
     "input": {
-      "schema_ref": "uenv://packages/datasets/pubmedqa/1.0.0/PubmedqaInput",
+      "schema_ref": "uenv://packages/datasets/gsm8k/1.0.0/Gsm8kInput",
       "data": {
-        "instruction": "Does the provided abstract support the statement?",
-        "contexts": [
-          "Synthetic abstract for interface demonstration."
-        ]
+        "instruction": "There are 2 apples and 3 more arrive. How many apples?"
       }
     },
-    "input_digest": "sha256:1ade3f8f79574b65e697961b7c8ae3169e493dfe17bc573b4c353e3382d2b08c"
+    "input_digest": "sha256:a7ce7d9b3477dccfa29c8712d8113626aef2bbe5aff58d1983cb9401a677f657"
   },
   "seed": 0,
-  "private_data": {
-    "schema_ref": "uenv://packages/datasets/pubmedqa/1.0.0/PubmedqaPrivateData",
-    "data": {
-      "answer": "maybe"
-    }
-  },
-  "purpose": "evaluation",
+  "purpose": "trajectory_collection",
   "model": {
     "endpoint": "http://localhost:9000/v1",
     "model_id": "example",
@@ -53,9 +44,9 @@
   },
   "environment": {
     "implementation": {
-      "id": "datasets/pubmedqa",
+      "id": "datasets/gsm8k",
       "version": "1.0.0",
-      "digest": "sha256:b04283e9173b3a39b1aba2aaa259f32ccc0596afc006039f1002f70c0cf5aad9"
+      "digest": "sha256:93b6cc135f50a89e297cc7e03160f16ff709652dfc7137da3166159095d605ea"
     },
     "config": {
       "schema_ref": "uenv://schemas/vnext/EmptyConfig",
@@ -74,17 +65,6 @@
         "history_policy": "full",
         "system_prompt": ""
       }
-    }
-  },
-  "scorer": {
-    "implementation": {
-      "id": "datasets/pubmedqa",
-      "version": "1.0.0",
-      "digest": "sha256:b04283e9173b3a39b1aba2aaa259f32ccc0596afc006039f1002f70c0cf5aad9"
-    },
-    "config": {
-      "schema_ref": "uenv://schemas/vnext/EmptyConfig",
-      "data": {}
     }
   },
   "backend": {
@@ -111,5 +91,5 @@
   "required_capabilities": [],
   "internet_access": false,
   "deadline_at_ms": 1800000300000,
-  "plan_digest": "sha256:fb6391382ae8d2c882365574b2d80cf7d9cec6db589729ab01f79baa82691824"
+  "plan_digest": "sha256:4fd9155b02010ff86668298992ffe60ecca2458605b98e6ca4871f866600715c"
 }

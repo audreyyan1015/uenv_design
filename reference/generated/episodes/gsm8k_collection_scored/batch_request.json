@@ -1,8 +1,8 @@
 {
-  "batch_id": "batch-gsm8k",
+  "batch_id": "batch-gsm8k_collection_scored",
   "run_spec": {
-    "run_id": "demo-gsm8k",
-    "purpose": "evaluation",
+    "run_id": "demo-gsm8k_collection_scored",
+    "purpose": "trajectory_collection",
     "environment": {
       "implementation": {
         "id": "datasets/gsm8k",
@@ -86,8 +86,8 @@
   },
   "episodes": [
     {
-      "request_id": "request-gsm8k",
-      "episode_id": "episode-gsm8k",
+      "request_id": "request-gsm8k_collection_scored",
+      "episode_id": "episode-gsm8k_collection_scored",
       "task": {
         "schema_version": "vnext.3",
         "task_id": "gsm8k/demo-gsm8k",
@@ -108,7 +108,7 @@
       },
       "seed": 0,
       "sample_index": 0,
-      "batch_id": "batch-gsm8k",
+      "batch_id": "batch-gsm8k_collection_scored",
       "private_data": {
         "schema_ref": "uenv://packages/datasets/gsm8k/1.0.0/Gsm8kPrivateData",
         "data": {

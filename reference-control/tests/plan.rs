@@ -271,6 +271,40 @@ fn nine_plans_are_rebuilt_by_one_rust_resolver() {
             .unwrap_or_else(|error| panic!("{}: {}", folder.display(), error.code));
         assert_eq!(rebuilt, expected, "{}", folder.display());
         validate_execution_plan(&rebuilt, &schema).unwrap();
+        // Unscored collection must not resolve any private harness, even when
+        // a reused source sample contains a reference to an unavailable one.
+        let mut collection = run.clone();
+        collection["purpose"] = json!("trajectory_collection");
+        collection["run_id"] = json!("collection-test");
+        collection.as_object_mut().unwrap().remove("scorer");
+        let mut source = episode.clone();
+        source["private_data"] = json!({"schema_ref": "unavailable-private-schema", "data": {
+            "evaluation_plan": {"harness": {"id": "unavailable/harness", "version": "1"}}
+        }});
+        let unscored = resolver
+            .resolve(&source, &collection, 1_800_000_000_000, &|image, _, _| {
+                Ok(image.clone())
+            })
+            .unwrap();
+        assert!(unscored.get("scorer").is_none());
+        assert!(unscored.get("private_data").is_none());
+        validate_execution_plan(&unscored, &schema).unwrap();
+        let mut wrong = unscored.clone();
+        wrong["purpose"] = json!("evaluation");
+        assert_eq!(
+            validate_execution_plan(&seal_plan(&wrong).unwrap(), &schema)
+                .unwrap_err()
+                .code,
+            "MISSING_SCORER"
+        );
+        wrong["purpose"] = json!("trajectory_collection");
+        wrong["training"] = json!({});
+        assert_eq!(
+            validate_execution_plan(&seal_plan(&wrong).unwrap(), &schema)
+                .unwrap_err()
+                .code,
+            "UNEXPECTED_TRAINING_CONFIGURATION"
+        );
         let mut multi = batch.clone();
         let mut second = episode.clone();
         second["request_id"] = json!("second-request");

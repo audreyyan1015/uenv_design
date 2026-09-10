@@ -2,7 +2,7 @@
 
 本指南按运行任务、自定义 Agent 和工具组织。产品 CLI/客户端仍是目标接口；仓库中的 reference 是可执行的本地参考，不是已部署服务。示例模型地址、镜像和任务资源需要替换为真实配置。
 
-新增数据集的文件结构、三个入口类、数据格式和原始字段映射统一见[数据集包模板](dataset_package_template.md)，不在本指南另维护一份。
+新增数据集的文件结构、组件入口类、数据格式和原始字段映射统一见[数据集包模板](dataset_package_template.md)，不在本指南另维护一份。
 
 ## 1. 准备任务数据
 
@@ -50,23 +50,26 @@ Server 不读取 YAML 文件，Worker 接收包含 ExecutionPlan 的派发请求
 | 字段 | 谁填写 | 谁读取及具体作用 |
 |---|---|---|
 | run_id | 调用方或 SDK 在首次提交前确定；同一配置跨批次复用 | Server 关联配置与结果，Bridge 按它提交和查询 |
-| purpose | 运行用户或训练框架 | Bridge/调用方选择评测汇总或训练消费；不改变评分 |
-| environment、scorer | 运行用户 | Server 分别锁定角色；Worker 加载环境规则和单条评分实现 |
+| purpose | 运行用户或训练框架 | evaluation 用于评测、training 用于在线训练接入、trajectory_collection 用于轨迹采集；Bridge 选择消费方式，Server 校验配置组合 |
+| environment | 运行用户 | Server 锁定角色；Worker 加载环境规则 |
+| scorer | 运行用户；评测/训练必填，轨迹采集可省略 | 唯一评分配置；填写则 Worker 评分，省略则不创建评分进程 |
 | agent | 运行用户 | Server 校验接口，Worker 启动所选智能体 |
 | backend | 运行用户 | Server 校验资源与兼容性；Worker 选择执行后端，按 resources 限制资源 |
 | model | 运行用户或训练框架 | Worker 模型入口使用端点、模型及 generation 参数；训练端点可指向 Bridge ModelGateway |
 | tools | 运行用户，显式给出完整列表 | Server 解析接口；Worker 只开放列表中的工具；[] 表示无工具 |
 | limits | 运行用户 | Server 固定总截止时间，Worker 限制模型调用、工具调用、环境动作和累计输出 |
 | retry | 运行用户，允许省略 | Server 决定基础设施失败是否重试及退避；不用于模型网络请求重试 |
-| training | 训练框架或运行用户，仅训练时提供 | Bridge/模型入口约束版本和训练轨迹；评测时不得填写 |
+| training | 训练框架或运行用户，仅训练时提供 | Bridge/模型入口约束版本和训练轨迹；评测和轨迹采集时不得填写 |
 | runtime.image | 需要覆盖镜像时由运行用户填写 | Server 选择并锁定镜像；Worker 使用最终值；Process 不接受显式镜像覆盖 |
 | trajectory_retention_days | 运行用户，允许省略 | 目标 Server/ArtifactStore 控制轨迹保存期；真实保留期服务仍待实现 |
+
+finalize_reserve_ms 是 limits 中为结果收集、冻结和可选评分预留的时间，包含在 total_timeout_ms 内，不评分也需要收尾时间。
 
 题目、答案、仓库信息和隐藏测试属于任务数据，不写进 run.yaml。Docker 引擎连接地址、宿主路径和隔离规则属于 Worker 部署配置，也不让普通运行用户填写。完整嵌套字段、类型及声明默认值查[生成字段字典](../generated/field_dictionary.md)，不在这里复制第二份字段清单。
 
 ### 2.3 哪些参数可以省略
 
-有声明默认值的参数允许省略。当前精简示例省略了默认资源、模型生成参数、重试退避、轨迹保留天数和默认组件参数。Environment、Agent、Scorer、Backend 的实现选择，模型端点和身份，以及 limits 中的预算仍须明确给出；不按数据集名称自动选择它们。
+有声明默认值的参数允许省略。当前精简示例省略了默认资源、模型生成参数、重试退避、轨迹保留天数和默认组件参数。Environment、Agent、Backend 的实现选择，模型端点和身份，以及 limits 中的预算仍须明确给出；Scorer 在评测和训练时也必须指定，轨迹采集允许省略；不按数据集名称自动选择它们。
 
 组件 config 省略时按空对象处理，再补该组件参数模型声明的默认值。若组件还有无默认值的必填参数，仍然报错。例如 Process 的 config.runtime_profile 必填，Docker/Podman 没有对应参数。
 
@@ -92,6 +95,16 @@ Process 的 runtime_profile 仅表示管理员准备好的本机运行环境；D
 
 参数独立选择不保证任意组合可用。系统按所选组件的类型、工具接口、运行依赖和资源能力判断兼容性；不按数据集名称选择默认后端，也不在组合失败时偷偷切换。
 
+### 2.6 轨迹采集怎样配置
+
+三种用途都记录同一种轨迹。评测重点是衡量表现，training 把奖励和轨迹交给 Trainer；trajectory_collection 只负责本次执行记录的保存与导出，不驱动模型更新。采集的数据以后可以用于离线训练，但是否可用由训练算法所需字段决定。
+
+只采集时设置 purpose: trajectory_collection 并省略 scorer；需要同时评分时，填写同一个 scorer 配置。两种情况都不填写 training，也不增加 enable_scoring 或其他开关。运行配置、BatchRequest 提交方式、后端和工具选择均保持一致。
+
+可直接查看[只采集示例](../../reference/runs/gsm8k_collection.yaml)与[采集并评分示例](../../reference/runs/gsm8k_collection_scored.yaml)，两份均为完整公共配置。示例使用模拟模型，不能当作真实评测或训练数据。
+
+无评分采集不要求 ground truth。准备阶段可只提供公开 task；已有标准化数据含 private_data 时，Bridge 提交前省略它，Server 不把它传入无评分的执行计划。原始源文件仍按原权限管理，不能把含答案的文件交给 Agent。
+
 ## 3. 提交、查看和取消
 
 ```text
@@ -109,12 +122,13 @@ RUN_ID 使用提交返回的运行标识，SAMPLE_ID 使用样本标识。运行
 
 | 看到的结果 | 含义与后续操作 |
 |---|---|
+| execution_status=completed，运行未配置 scorer | 采集执行正常结束，没有评分；不能当作答对或零分 |
 | execution_status=completed，score.status=ok | 执行和评分完成；再看 score.success、reward，判断任务表现 |
 | score.status=ok，success=false | 评分器正常工作，候选答案或产物未成功；可检查回答和轨迹 |
 | score.status=error | 评分程序或评测依赖出错；查 error，不能当作模型答错 |
 | 进入评分前执行失败 | 没有 score；先检查执行错误和可用的部分轨迹 |
 
-结果包含最终回答或产物、评分、用量和轨迹引用。评分结构及训练消费规则见[主方案第 8 章](../uenv_design.md#8-评分与轨迹)。用户不需要填写内部调度身份、租约、摘要或事件序号。
+结果包含最终回答或产物、实际产生的评分、用量和轨迹引用。配置了 scorer 却评分失败时依然报告错误并保留轨迹，不能隐去失败当作无评分采集。默认轨迹导出选择 Server 最终接纳的 attempt；需要历史尝试时显式选择。筛选成功轨迹和格式转换生成派生文件，不改写原始记录。采集轨迹缺少某训练算法需要的 token/logprob 等信息时，训练消费端必须拒绝，不补造这些信息。评分结构及训练消费规则见[主方案第 8 章](../uenv_design.md#8-评分与轨迹)。用户不需要填写内部调度身份、租约、摘要或事件序号。
 
 ## 5. 自定义智能体
 

@@ -1,8 +1,8 @@
 {
-  "batch_id": "batch-gsm8k",
+  "batch_id": "batch-gsm8k_collection",
   "run_spec": {
-    "run_id": "demo-gsm8k",
-    "purpose": "evaluation",
+    "run_id": "demo-gsm8k_collection",
+    "purpose": "trajectory_collection",
     "environment": {
       "implementation": {
         "id": "datasets/gsm8k",
@@ -27,16 +27,6 @@
       }
     },
     "tools": [],
-    "scorer": {
-      "implementation": {
-        "id": "datasets/gsm8k",
-        "version": "1.0.0"
-      },
-      "config": {
-        "schema_ref": "uenv://schemas/vnext/EmptyConfig",
-        "data": {}
-      }
-    },
     "backend": {
       "implementation": {
         "id": "backends/process",
@@ -86,8 +76,8 @@
   },
   "episodes": [
     {
-      "request_id": "request-gsm8k",
-      "episode_id": "episode-gsm8k",
+      "request_id": "request-gsm8k_collection",
+      "episode_id": "episode-gsm8k_collection",
       "task": {
         "schema_version": "vnext.3",
         "task_id": "gsm8k/demo-gsm8k",
@@ -108,13 +98,7 @@
       },
       "seed": 0,
       "sample_index": 0,
-      "batch_id": "batch-gsm8k",
-      "private_data": {
-        "schema_ref": "uenv://packages/datasets/gsm8k/1.0.0/Gsm8kPrivateData",
-        "data": {
-          "answer": "5"
-        }
-      }
+      "batch_id": "batch-gsm8k_collection"
     }
   ]
 }

@@ -1,18 +1,14 @@
-run_id: demo-pubmedqa
-purpose: evaluation
+run_id: demo-gsm8k_collection
+purpose: trajectory_collection
 environment:
   implementation:
-    id: datasets/pubmedqa
+    id: datasets/gsm8k
     version: 1.0.0
 agent:
   implementation:
     id: agents/plain
     version: 1.0.0
 tools: []
-scorer:
-  implementation:
-    id: datasets/pubmedqa
-    version: 1.0.0
 backend:
   implementation:
     id: backends/process

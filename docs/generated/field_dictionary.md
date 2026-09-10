@@ -210,7 +210,7 @@ TypedConfig 的 data 不是任意 JSON：必须递归满足 schema_ref 指向的
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
 | `total_timeout_ms` | integer | 是 | 从 Server 接收起的总预算，包含排队及评分；最小值：1 |
-| `score_reserve_ms` | integer | 是 | 为结果收集、冻结及最终评分预留预算；三者共享总截止时间；最小值：0 |
+| `finalize_reserve_ms` | integer | 是 | 为结果收集、冻结及可选评分预留时间；无评分也保留，全部共享总截止时间；最小值：0 |
 | `max_generations` | integer | 是 | 成功或部分完成的模型生成调用预算；最小值：1 |
 | `max_tool_calls` | integer | 是 | 接受执行的工具调用预算；最小值：0 |
 | `max_environment_steps` | integer | 是 | 环境转移次数预算；无状态任务可为 0；最小值：0 |
@@ -246,17 +246,17 @@ episode 失败重试仅 Server 决定
 |---|---|---|---|
 | `schema_version` | 按 discriminator 选择 | 是 | 契约版本；固定值：vnext.3 |
 | `run_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `purpose` | string | 是 | 作业用途；枚举：evaluation, training |
+| `purpose` | string | 是 | 结果用途；不决定评分算法；枚举：evaluation, training, trajectory_collection |
 | `environment` | ComponentSpec | 是 |  |
 | `agent` | ComponentSpec | 是 | 智能体实现与参数；不提供 Agent 池或 placement；按 agent 角色校验接口和配置 |
 | `tools` | array<ToolBinding> | 是 | 完整显式工具绑定；空数组要求实际无模型可见工具，不兼容的 Agent 必须拒绝 |
-| `scorer` | ComponentSpec | 是 | 本次运行唯一评分器；评测与后训练复用它产生的同一个 ScoreResult |
+| `scorer` | ComponentSpec | 否 | 唯一评分配置；评测和训练必填，轨迹采集可省略；省略即不评分，不接受 null |
 | `backend` | BackendSpec | 是 |  |
 | `model` | ModelSpec | 是 |  |
 | `limits` | Limits | 是 |  |
 | `retry` | RetryPolicy | 是 | ；提交默认值：{} |
 | `trajectory_retention_days` | integer | 是 | Server 保存权威轨迹的天数；只影响保留期，不改变记录内容；最小值：1；提交默认值：7 |
-| `training` | TrainingSpec | 否 | 仅 purpose=training 时必填；purpose=evaluation 时禁止出现 |
+| `training` | TrainingSpec | 否 | 仅 purpose=training 时必填；评测和轨迹采集时禁止出现 |
 | `runtime` | RuntimeSpec | 否 | 用户显式镜像选择，优先于 task 和 package |
 
 ## EpisodeRequest
@@ -314,10 +314,10 @@ Server 颁发，Worker 核验；不能由用户任务参数携带
 | `private_data` | TypedConfig | 否 | 可选评分依据，随受控请求配对提交；大型测试使用内部 ArtifactRef；不得交给 Agent/Environment 或公开轨迹 |
 | `seed` | integer | 是 | 本次 episode 种子；最小值：0 |
 | `run_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `purpose` | string | 是 | 作业用途；枚举：evaluation, training |
+| `purpose` | string | 是 | 结果用途；不决定评分算法；枚举：evaluation, training, trajectory_collection |
 | `model` | ModelSpec | 是 |  |
 | `limits` | Limits | 是 |  |
-| `training` | TrainingSpec | 否 | 仅 purpose=training 时必填；purpose=evaluation 时禁止出现 |
+| `training` | TrainingSpec | 否 | 仅 purpose=training 时必填；评测和轨迹采集时禁止出现 |
 | `environment` | object | 是 | 选择一个实现及其 schema 验证后的参数 |
 | `environment.implementation` | ResolvedComponent | 是 |  |
 | `environment.config` | TypedConfig | 是 |  |
@@ -328,7 +328,7 @@ Server 颁发，Worker 核验；不能由用户任务参数携带
 | `backend.implementation` | ResolvedComponent | 是 |  |
 | `backend.config` | TypedConfig | 是 |  |
 | `backend.resources` | Resources | 是 | ；提交默认值：{} |
-| `scorer` | object | 是 | 选择一个实现及其 schema 验证后的参数 |
+| `scorer` | object | 否 | 选择一个实现及其 schema 验证后的参数 |
 | `scorer.implementation` | ResolvedComponent | 是 |  |
 | `scorer.config` | TypedConfig | 是 |  |
 | `attempt_id` | integer | 是 | Server 生成；正常首次执行为 1，只有基础设施重试才递增，且不重选配置；最小值：1 |
@@ -450,7 +450,7 @@ Worker 产生候选结果，Server 校验租约后形成唯一权威终态
 | `attempt_id` | integer | 是 | 有效 attempt；最小值：1 |
 | `task_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
 | `execution_status` | string | 是 | 执行是否完成；枚举：completed, failed, timeout, cancelled |
-| `score` | ScoreResult | 否 | episode 结束后产生的唯一正式评分结果 |
+| `score` | ScoreResult | 否 | 仅实际评分时产生；无评分省略，Server 结合 ExecutionPlan 校验应有评分，不能伪造零分 |
 | `outcome` | Outcome | 否 |  |
 | `trajectory_ref` | ArtifactRef | 否 |  |
 | `usage` | Usage | 是 |  |
@@ -606,7 +606,7 @@ attempt 的轨迹索引；评分前快照与最终封存使用同一结构，终
 |---|---|---|---|
 | `dataset_adapter` | string | 是 | 原始行 -> PreparedSample |
 | `environment` | string | 是 | Environment 实现 |
-| `scorer` | string | 是 | 唯一单条 episode Scorer 实现；评测与后训练共用 |
+| `scorer` | string | 否 | 提供评分时声明的专属 Scorer 入口；仅采集的包可省略 |
 
 ## PackageManifest
 
@@ -620,9 +620,9 @@ attempt 的轨迹索引；评分前快照与最终封存使用同一结构，终
 | `entrypoints` | EntryPoints | 是 |  |
 | `task_schema` | string | 是 | 任务业务字段 schema 标识 |
 | `private_schema` | string | 否 | 私有评分字段 schema 标识 |
-| `config_schemas` | object | 是 | 同一包内两个运行角色各自接受的配置 schema；角色名就是唯一索引 |
+| `config_schemas` | object | 是 | 已声明运行角色各自接受的配置 schema；scorer 与同名入口同时出现或省略 |
 | `config_schemas.environment` | string | 是 | Environment.config 接受的 schema 标识 |
-| `config_schemas.scorer` | string | 是 | Scorer.config 接受的 schema 标识 |
+| `config_schemas.scorer` | string | 否 | Scorer.config 接受的 schema 标识 |
 | `internet_access` | boolean | 是 | Environment 是否需要公共互联网；数据行、RunSpec、Agent 和 Tool 不得覆盖 |
 | `required_capabilities` | array<string> | 是 | 部署所需的 Worker 功能；不写 Docker/OpenHands 名称，也不授予访问权限 |
 | `artifacts` | array<ArtifactRef> | 是 | 代码 wheel 和显式声明的运行文件；镜像只由 runtime.image 引用 |

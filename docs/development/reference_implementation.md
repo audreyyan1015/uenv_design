@@ -26,6 +26,10 @@
 
 Rust 不重复声明 TaskSpec、ExecutionPlan、ScoreResult 等公开结构。当前本地参考暂以 `contracts/uenv.schema.json` 驱动 Python validator，Rust 只读取类型与字段集合并追加跨字段检查。目标生产协议以 `contracts/proto/uenv/v1/*.proto` 为唯一可编辑来源；Rust/Python 类型、RPC stub、核心 JSON schema 和字段字典全部生成。数据集新增业务字段只在包内 models.py 定义并生成包 schema。生产 Server/Worker 的每个外部边界必须使用生成类型或完整校验器，不能把本地 `validate_shape` 当成完整 JSON Schema 校验。
 
+轨迹采集复用 BatchRequest/ExecutionPlan/EpisodeSupervisor 和 TrajectoryWriter。validate_run_purpose 在批次、计划解析与 Worker 入口检查三种用途及 scorer/training 组合；PlanResolver 无 scorer 时不解析私有材料和 harness。Supervisor 接收可选 ScorerHost，其存在性必须与 plan.scorer 一致，不接受占位评分器。正常无评分执行保留 Outcome、清理和最终轨迹；有评分失败时保留错误评分。validate_result_for_plan 在本地返回边界检查评分与计划相符，生产 Server 还必须在租约事务中接入同一校验。
+
+本地生成器遍历 reference/runs 中的公共配置，根据 environment.implementation 找到已登记包，使用同一提交构建逻辑；新增采集示例不在生成器内按数据集或用途硬编码分流。Bridge/RPC、实际数据库、真实导出服务和模型训练框架仍是目标接口，不能把参考端口测试视为生产验收。
+
 ## 3. Python 参考文件
 
 `reference/sdk/src/uenv/sdk/` 提供以下用户接口：
@@ -40,11 +44,11 @@ Rust 不重复声明 TaskSpec、ExecutionPlan、ScoreResult 等公开结构。�
 
 ComponentHost 先按所选角色的 package config schema 完整校验 `ComponentSpec.config`，再只把 `config.data` 这一个 dict 传给 `Environment(config)`、`AgentRunner(config)`、`Scorer(config)` 或 `ToolExecutor(config)`；基类统一保存为 `self.config`。空配置也显式传 `{}`。组件不能同时读取整个 TypedConfig、环境变量或包默认值来形成第二套运行配置。
 
-包模型由 dataset.yaml.models 显式登记，不扫描方法体猜测类型。input 必填；private_data、environment_config、scorer_config、action、observation、state 按需登记。未声明的角色配置使用 EmptyConfig；已声明的配置 schema 用于校验同一份 config.data，构造函数仍接收 dict。嵌套 UEnvModel 自动生成并恢复；ArtifactRef、ContentPart、EvaluationPlan 复用公共 schema。参考生成器对递归模型和有歧义的联合类型明确报错。
+包模型由 dataset.yaml.models 显式登记，不扫描方法体猜测类型。input 必填；private_data、environment_config、scorer_config、action、observation、state 按需登记。已提供入口但未声明的角色配置使用 EmptyConfig；无 scorer 入口时不生成对应配置 schema；已声明的配置 schema 用于校验同一份 config.data，构造函数仍接收 dict。嵌套 UEnvModel 自动生成并恢复；ArtifactRef、ContentPart、EvaluationPlan 复用公共 schema。参考生成器对递归模型和有歧义的联合类型明确报错。
 
 参考发布加载器不要求 tests/，但 build_examples 仍读取九个包保留的合成测试数据。build_manifest 尚未构建或上传 wheel、发布工具函数、执行 Hub 准入；生成 manifest 中 artifacts/provided_tools 为空是本地夹具边界。SDK 的 __init__.py 暂集中提供小型参考接口；生产目录仍按 module_map 拆分并仅在 __init__.py 导出。
 
-每个数据集都声明自己明确命名的三个直接子类。例如 GSM8K 使用 `Gsm8kAdapter`、`Gsm8kEnvironment`、`Gsm8kScorer`；SWE Verified 使用 `SweVerifiedAdapter`、`SweVerifiedEnvironment`、`SweVerifiedScorer`。共享逻辑放在普通函数中复用，不再增加 `QuestionAnswerEnvironment`、`TextScorer` 或 `HarnessScorer` 中间层。
+九个内置数据集均提供评分，因此各自声明三个明确命名的直接子类；仅采集包可省略 Scorer 入口和配置 schema。例如 GSM8K 使用 `Gsm8kAdapter`、`Gsm8kEnvironment`、`Gsm8kScorer`；SWE Verified 使用 `SweVerifiedAdapter`、`SweVerifiedEnvironment`、`SweVerifiedScorer`。共享逻辑放在普通函数中复用，不再增加 `QuestionAnswerEnvironment`、`TextScorer` 或 `HarnessScorer` 中间层。
 
 Python `ScoreResult` 是同一个结果对象。Scorer 只填写四个业务字段：
 
@@ -122,7 +126,7 @@ sequenceDiagram
 | backend、runtime、internet_access | PlanResolver 解析组合和镜像；Backend.open 接收锁定后的计划信息 | 真正的 Process/Docker/Podman 驱动与隔离待实现 |
 | model、training | AgentRuntime.generate 交给 ModelProvider，并检查生成记录 | 模型服务为 mock；生产 Bridge、推理端点与训练框架待接入 |
 | tools | PlanResolver 匹配接口；ToolHost.prepare 和 AgentHost.prepare 分别核验同一计划工具表；AgentRuntime.call_tool 使用它 | 已验证端口约束；Python 函数包装、MCP 和 OpenHands 待接入 |
-| scorer | Rust run_score 调用 ScorerHost，补全状态和错误 | 已有本地评分与错误测试；真实 harness 尚未验收 |
+| scorer | 存在时 Rust run_score 调用 ScorerHost；省略时跳过，validate_result_for_plan 核验结果是否应有评分 | 已有本地评分与错误测试；真实 harness 尚未验收 |
 | limits、deadline_at_ms | PlanResolver 固定截止时间；BudgetEnforcer 和 Supervisor 使用派发剩余量限制调用 | 本地预算有效；真实 RPC 授权与累计持久账本待实现 |
 | trajectory_retention_days | 目标由 Server/ArtifactStore 控制保存期，不进入 ExecutionPlan | 当前没有生产消费者，随轨迹存储与回收功能实施 |
 
@@ -138,11 +142,11 @@ Python validator 递归执行完整 JSON Schema；Rust ContractSchema 参考只�
 
 执行时私有评分材料原名传入 `EpisodeRequest.private_data`、`ExecutionPlan.private_data` 和 `ScoreInput.private_data`；准备阶段位于 PreparedSample 或标准化 JSONL 的同名字段。它不会进入 TaskSpec、Observation、AgentRuntime 或轨迹事件。Python Scorer 若需要运行正式测试，只能通过 `ScoringContext.run_harness()`；该回调由 Rust Worker 绑定到当前 Backend 的冻结评分视图。`ToolHost.freeze()` 先撤销 Agent 工具写入，`Backend.freeze()` 再固定 session 内容；完成这两步后才创建评分 checkpoint 和调用 Scorer。所有 freeze/close 都必须幂等。
 
-Agent 交互结束后，finalize、freeze 和 Scorer 共用 score_reserve_ms 留出的总剩余时间；评分上下文沿用 BudgetEnforcer 的原始单调截止时间，不重新计算一个更晚的截止时间。
+Agent 交互结束后，finalize、freeze 和可选 Scorer 共用 finalize_reserve_ms 留出的总剩余时间；评分上下文沿用 BudgetEnforcer 的原始单调截止时间，不重新计算一个更晚的截止时间。
 
 `ScoreInput` 不再携带 `remaining_timeout_ms`。Scorer 只能从 `ScoringContext` 查询 Supervisor 当前剩余预算；harness 的实际超时取这份剩余预算与 evaluation_plan 中超时上限的较小值，因此评分阶段没有第二个可覆盖的时间来源。
 
-评测与后训练走同一评分路径，产生同一个 `EpisodeResult.score.reward`。进入评分前失败没有 score；已经调用 Scorer 后，status=ok 或 status=error 的同一个 ScoreResult 都保留。区别只在下游如何消费结果；Worker 不为 training 维护第二套评分函数。
+评测与后训练走同一评分路径，产生同一个 `EpisodeResult.score.reward`。无 scorer 或进入评分前失败时没有 score；已经调用 Scorer 后，status=ok 或 status=error 的同一个 ScoreResult 都保留。区别只在下游如何消费结果；Worker 不为 training 维护第二套评分函数。
 
 每条 `GenerationEvent.output_token_count` 都必填，并且是预算统计的唯一来源。`output_token_ids`、`output_logprobs` 和 `loss_mask` 是可选的详细训练轨迹；存在时必须彼此对齐并与 count 一致。训练配置要求 token trace 时，缺少这些详细字段的结果不能进入训练，但仍可以作为普通评测结果保存。
 
@@ -160,7 +164,7 @@ Backend.open、各 Host.prepare、AgentHost.run_agent、ToolHost/Backend.freeze�
 
 九份 batch_request.json 是实际提交结构示例；同目录 run_spec.json 和 episode_request.json 仅为方便查阅而展开的字段视图，不代表独立的配置提交接口或另一处生效来源。Rust validate_batch_submission 的 stored_run 是受信的只读对照，不用于补齐本次配置；生产 Server 必须在事务内再次核验并持久化，参考不实现数据库或网络注册服务。
 
-公开运行示例不填写 schema_version。expand_run 共用于 YAML 解析后的对象和 SDK 提供的公开字典，使用 SchemaRegistry.apply_defaults 补齐声明默认值，再递归校验组件参数和完整 RunSpec；普通 validate 不补值。默认资源、模型生成、重试及组件参数已从九份模板移除，由契约注解补齐，用户显式参数保持原值。该函数在提交边界生成内部协议标记。该夹具辅助函数当前一次接收一份包 manifest，Environment/Scorer 选择不匹配时明确拒绝；生产提交端须分别按两个已选角色查询目录，Rust PlanResolver 已分别解析角色，不受夹具限制。
+公开运行示例不填写 schema_version。expand_run 共用于 YAML 解析后的对象和 SDK 提供的公开字典，使用 SchemaRegistry.apply_defaults 补齐声明默认值，再递归校验组件参数和完整 RunSpec；普通 validate 不补值。默认资源、模型生成、重试及组件参数已从九份模板移除，由契约注解补齐，用户显式参数保持原值。该函数在提交边界生成内部协议标记。该夹具辅助函数当前一次接收一份包 manifest，Environment/Scorer 选择不匹配时明确拒绝；生产提交端须按实际已选角色查询目录，Rust PlanResolver 已分别解析角色，不受夹具限制。
 
 ## 8. 实现状态与待决事项
 
@@ -238,7 +242,7 @@ classDiagram
   DatasetAdapter ..> PreparedSample : returns
   EpisodeSupervisor ..> ComponentHostProcess : starts role-scoped instances
   ComponentHostProcess ..> ComponentHost : supervises
-  EpisodeSupervisor ..> ScorerHost : invokes once after freeze
+  EpisodeSupervisor ..> ScorerHost : invokes if scorer is configured
   ComponentHost ..> Environment : reset / step / finalize / close
   ComponentHost ..> AgentRunner : run once
   ScorerHost ..> Scorer : score
@@ -302,7 +306,8 @@ sequenceDiagram
   W->>E: finalize(Outcome, context)
   E-->>W: 最终 Outcome
   W->>T: freeze，拒绝后续工具请求
-  W->>B: freeze，固定只读评分视图
+  W->>B: freeze，固定最终产物
+  opt ExecutionPlan 配置了 scorer
   W->>W: 保存评分快照
   W->>P: ScoreInput 与私有材料授权
   P->>S: score(ScoreInput, context)
@@ -310,6 +315,7 @@ sequenceDiagram
   P-->>W: ScoreResult（业务字段）
   W->>W: 补全系统字段并写 score 事件
   W->>P: close Scorer Host
+  end
   W->>H: close Agent Host
   W->>T: close ToolHost
   W->>E: close Environment Host
@@ -318,9 +324,9 @@ sequenceDiagram
   Note over W,E: Rust Worker 强制处理失败、取消、超时和资源清理
 ```
 
-AgentContext 不是另一个调度服务。它在 Python 中向 Agent 提供 task、observation、step、generate 和工具入口；调用必须进入 Rust `AgentRuntime`，由它在副作用发生前检查取消、截止时间和对应预算。Python 只把框架调用转换成协议，不能直连模型后再补报、不能自行增加次数、延长截止时间或封存轨迹。本地 Rust 参考把受控调用集中在 [AgentRuntime](../../reference-control/src/runtime.rs)。open、prepare、Agent.run、freeze 以及每次模型/工具/环境/评分调用都接收同一预算派生的当前 remaining_ms。清理固定为 ScorerHost → AgentHost → ToolHost → EnvironmentHost → Backend；`freeze()`、`close()` 都必须幂等，某一步失败也继续尝试后续步骤。close 使用平台固定的清理超时，不能因 episode 预算已耗尽而跳过。
+AgentContext 不是另一个调度服务。它在 Python 中向 Agent 提供 task、observation、step、generate 和工具入口；调用必须进入 Rust `AgentRuntime`，由它在副作用发生前检查取消、截止时间和对应预算。Python 只把框架调用转换成协议，不能直连模型后再补报、不能自行增加次数、延长截止时间或封存轨迹。本地 Rust 参考把受控调用集中在 [AgentRuntime](../../reference-control/src/runtime.rs)。open、prepare、Agent.run、freeze 以及每次模型/工具/环境/评分调用都接收同一预算派生的当前 remaining_ms。清理固定为 ScorerHost → AgentHost → ToolHost → EnvironmentHost → Backend，仅关闭已创建的资源；无评分时没有 ScorerHost；`freeze()`、`close()` 都必须幂等，某一步失败也继续尝试后续步骤。close 使用平台固定的清理超时，不能因 episode 预算已耗尽而跳过。
 
-单轮问答仍调用同一个 Agent.run，只生成一次回答，可以不调用 step。多轮策略由 AgentRunner 决定，Rust Worker 强制公共预算；Supervisor 不再套一层模型决策循环。多轮中的公开反馈来自 Environment.step 的 Observation 或工具结果；这些内容会写入轨迹，但正式 ScoreResult 只在最终 Outcome 冻结后产生一次。
+单轮问答仍调用同一个 Agent.run，只生成一次回答，可以不调用 step。多轮策略由 AgentRunner 决定，Rust Worker 强制公共预算；Supervisor 不再套一层模型决策循环。多轮中的公开反馈来自 Environment.step 的 Observation 或工具结果；这些内容会写入轨迹，但配置了 scorer 才在最终 Outcome 冻结后产生至多一次正式 ScoreResult。
 
 ### 9.3 工具路由与资源端口
 

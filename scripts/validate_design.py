@@ -486,6 +486,62 @@ class ContractTests(unittest.TestCase):
             validate("RunSpec", run)
         self.assertNotEqual(qa["backend"], swe["backend"])
 
+    def test_collection_scoring_is_optional_without_configuration_aliases(self):
+        for name, scored in (("gsm8k_collection", False), ("gsm8k_collection_scored", True)):
+            batch = generated(name, "batch_request.json")
+            plan = generated(name, "execution_plan.json")
+            validate("BatchRequest", batch)
+            validate("ExecutionPlan", plan)
+            self.assertEqual(batch["run_spec"]["purpose"], "trajectory_collection")
+            self.assertEqual("scorer" in plan, scored)
+            self.assertEqual("private_data" in plan, scored)
+            self.assertNotIn("training", plan)
+            for invalid_purpose in ("evaluation", "training"):
+                invalid = copy.deepcopy(batch["run_spec"])
+                invalid["purpose"] = invalid_purpose
+                invalid.pop("scorer", None)
+                with self.assertRaises(ValidationError):
+                    validate("RunSpec", invalid)
+            invalid = copy.deepcopy(plan)
+            invalid["scorer"] = None
+            with self.assertRaises(ValidationError):
+                validate("ExecutionPlan", invalid)
+            invalid = copy.deepcopy(batch["run_spec"])
+            invalid["training"] = {}
+            with self.assertRaises(ValidationError):
+                validate("RunSpec", invalid)
+        no_score = generated("gsm8k_collection", "execution_plan.json")
+        no_score["private_data"] = generated("gsm8k", "episode_request.json")["private_data"]
+        with self.assertRaises(ValidationError):
+            validate("ExecutionPlan", no_score)
+        limits = SCHEMA["$defs"]["Limits"]["properties"]
+        self.assertIn("finalize_reserve_ms", limits)
+        self.assertNotIn("score_" + "reserve_ms", limits)
+
+    def test_collection_package_does_not_require_a_scorer_entrypoint(self):
+        package = copy.deepcopy(PACKAGES["gsm8k"])
+        package["declaration"]["entrypoints"].pop("scorer")
+        package["declaration"]["models"].pop("private_data", None)
+        package.pop("scorer", None)
+        package.pop("private_data_model", None)
+        validate_author_package(package)
+        with tempfile.TemporaryDirectory(prefix="uenv-collection-package-") as folder:
+            manifest = build_manifest(package, Path(folder) / "generated/packages/collection")
+            validate("PackageManifest", manifest)
+            self.assertNotIn("scorer", manifest["entrypoints"])
+            self.assertNotIn("scorer", manifest["config_schemas"])
+            self.assertNotIn("private_schema", manifest)
+            public = load_yaml(ROOT / "reference/runs/gsm8k_collection.yaml")
+            run = expand_run(public, manifest, CATALOG)
+            validate("RunSpec", run)
+            public["scorer"] = copy.deepcopy(public["environment"])
+            with self.assertRaisesRegex(ValueError, "does not provide scorer"):
+                expand_run(public, manifest, CATALOG)
+            invalid = copy.deepcopy(manifest)
+            invalid["config_schemas"]["scorer"] = "uenv://schemas/vnext/EmptyConfig"
+            with self.assertRaises(ValidationError):
+                validate("PackageManifest", invalid)
+
     def test_purpose_has_exactly_one_matching_configuration_shape(self):
         run = generated("gsm8k", "run_spec.json")
         training = {

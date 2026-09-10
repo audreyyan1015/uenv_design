@@ -2,6 +2,17 @@
 
 验证日期：2026-09-10。验证对象仅为 `architecture-review-0905/design`。
 
+## 轨迹采集与可选评分复验（2026-09-10）
+
+- RunSpec 新增 trajectory_collection；scorer 在评测/训练必填，在轨迹采集可省略。training 仍仅用于在线训练接入。没有新增提交协议、执行器或轨迹根类型。
+- 统一使用 limits.finalize_reserve_ms；Python 契约、Rust 预算、九份原运行配置及生成计划同步替换旧字段。对照前一提交，九份原 ExecutionPlan 除预算字段名称和随之变化的 plan_digest 外，执行配置与任务内容一致。
+- 无评分时不下发私有材料、不解析隐藏 harness、不创建 ScorerHost、不生成评分前快照或 score 事件；正常完成仍保存 Outcome、清理与最终完整轨迹。有评分失败时保留错误评分和轨迹。
+- Rust validate_result_for_plan 结合计划检查身份、Scorer 身份和 score 应否存在；配置了 scorer 的 completed 丢失成功评分时拒绝，未配置时拒绝伪造评分。生产 Server 尚需把此校验与完整 schema/租约事务接通。
+- 新增 gsm8k_collection、gsm8k_collection_scored 两份完整运行配置及对应生成批次/计划。已有九个数据集保留三个专属类；发布加载器和 PackageManifest 支持仅采集包省略 Scorer 入口及配置 schema，已通过无评分器包发布测试。
+- 35 项 Python/设计验证通过，其中包含 Rust 测试入口；Rust 共 24 项测试通过（3 项单元、6 项计划、15 项执行控制）。fmt、clippy --offline --locked --all-targets -- -D warnings 通过。
+- 82 个本地文件链接及标题锚点、26 个 Mermaid 块的边界和时序分支配对检查通过；未逐图渲染。三个生成器均已执行，所有当前规范与示例使用唯一预算字段名。
+- 以上验证仅针对 design 的参考实现。生产源码未修改；真实采集导出、Hub 服务、训练消费、模型、容器和 OpenHands 的接入与验收仍按重构计划实施。没有新增临时脚本或仓库内构建缓存。
+
 ## 批次一次提交复验（2026-09-10）
 
 - BatchRequest 统一为 batch_id、run_spec、episodes；配置随任务一次提交，没有前置注册接口。EpisodeRequest 移除 run_id 和任何配置覆盖，ExecutionPlan.run_id 只从批次 RunSpec 派生。

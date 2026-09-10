@@ -1,12 +1,12 @@
 # 数据集统一包模板与代码复用
 
-UEnv 不按问答、代码、SWE 或交互方式给数据集划分系统类型。所有数据集使用同一个包模板和同一条执行链。模板固定提供三个职责入口：Adapter、Environment、Scorer；它们是一个数据集包中的三个类，不是三类数据集。九个本地参考包、发布加载器和生成契约已采用同一目录、类结构和发布字段。生产服务迁移和产品侧脚手架尚未完成。
+UEnv 不按问答、代码、SWE 或交互方式给数据集划分系统类型。所有数据集使用同一个包模板和同一条执行链。模板提供 Adapter、Environment 和可选 Scorer 三种职责入口，不据此划分数据集类型。Adapter、Environment 必需；仅采集且没有评价规则的包可省略 Scorer。九个本地参考包、发布加载器和生成契约已采用同一目录、类结构和发布字段。生产服务迁移和产品侧脚手架尚未完成。
 
-本文件替代此前以“省略 Python 类”为目标的最小模板。明确约定：**每个数据集必须有自己命名的 Adapter、Environment、Scorer 类，统一继承系统提供的对应基类。**
+本文件替代此前以“省略 Python 类”为目标的最小模板。明确约定：**每个数据集必须有自己命名的 Adapter、Environment 类；提供评分时还需专属 Scorer 类，各自直接继承系统基类。仅采集的包允许省略 Scorer，不编写固定零分的占位类。**
 
 运行配置不属于数据集包；run.yaml 的统一模板、Bridge/SDK 处理方式和默认值说明见[用户指南第 2 节](user_guide.md#2-填写运行配置)。
 
-## 1. 固定的三个入口
+## 1. 统一的组件入口
 
 | 数据集 | dataset_adapter.py | environment.py | scorer.py |
 |---|---|---|---|
@@ -22,9 +22,13 @@ UEnv 不按问答、代码、SWE 或交互方式给数据集划分系统类型�
 
 类名采用项目统一的 PascalCase，不另外混用全大写缩写。每个类必须在其数据集模块中实际声明；manifest 指向该声明。`from shared import ScorerClass as Gsm8kScorer` 只是别名，不满足专属类要求。已有数据集增加样本、划分或配置变体时继续使用原有类，不为每条样本生成类。
 
+仅采集的包同时省略 scorer.py、dataset.yaml.entrypoints.scorer 和 models.scorer_config；构建后的 manifest 也不包含 entrypoints.scorer/config_schemas.scorer。若运行选择某个包作为 Scorer 而该包未提供该角色，提交时拒绝；不会用空评分实现补齐。input 模型仍必填，ground truth/private_data 按实际需要声明，不因采集而新增数据格式。
+
+已有九个支持评测的数据集保留全部三个专属类；使用它们做无评分采集时只需在 RunSpec 省略 scorer，不删除包内类。原始样本必须满足 Adapter 已声明的输入要求；只有公开题目的采集数据可用不要求答案的 Adapter，或直接提供符合本包 input schema 的标准 task，不伪造答案。
+
 ## 2. 继承与复用方式
 
-三个入口类分别直接继承 DatasetAdapter、Environment、Scorer，实现 normalize、reset、score。所有数据集 Scorer 不增加中间评分基类，也不继承其他数据集的 Scorer；公共逻辑通过函数或组合组件复用。
+已提供的入口类分别直接继承 DatasetAdapter、Environment、Scorer，实现 normalize、reset、score。所有数据集 Scorer 不增加中间评分基类，也不继承其他数据集的 Scorer；公共逻辑通过函数或组合组件复用。
 
 专属类必须实现对应的抽象入口，不能只有 pass；方法体可以直接调用公共函数，不要求复制相同算法。参数和方法的复用不得改变业务评分规则。多个数据集共享代码不意味着共用有状态对象；每个执行 attempt 使用独立环境/会话状态。
 
@@ -39,7 +43,7 @@ my_dataset/
     models.py           # 按需：本数据集新增的业务字段模型；复用 SDK 类型时省略
     dataset_adapter.py          # 必需：MyDatasetAdapter
     environment.py      # 必需：MyDatasetEnvironment
-    scorer.py           # 必需：MyDatasetScorer
+    scorer.py           # 提供评分时必需：MyDatasetScorer；仅采集可省略
     tools.py            # 可选：数据集特有操作
 ```
 
@@ -79,10 +83,10 @@ required_capabilities: []
 | `version`（string） | 包作者发布新代码时更新 | 发布工具、组件查询和计划解析器 | 选择确定版本的代码与字段定义；避免升级评分代码后旧运行改用新规则 |
 | `entrypoints.dataset_adapter`（string） | 作者或脚手架填写本包类入口 | 数据准备阶段的包加载器 | 导入对应 Adapter，调用 normalize 将原始样本转换成规范输入 |
 | `entrypoints.environment`（string） | 作者或脚手架填写本包类入口 | Worker 的 EnvironmentHost 加载器 | 创建对应 Environment，调用 reset 及按需实现的 step/finalize |
-| `entrypoints.scorer`（string） | 作者或脚手架填写本包类入口 | Worker 的 ScorerHost 加载器 | 创建对应 Scorer，对单条 episode 的 Outcome 评分 |
+| `entrypoints.scorer`（可选 string） | 提供评分时由作者或脚手架填写本包类入口 | 发布校验和 Worker ScorerHost | 创建对应评分器；仅采集包可省略，RunSpec 选择未提供的评分角色时拒绝 |
 | `models.input`（string） | 作者填写 Python 模型入口 | 发布工具、准备入口及 SDK 模型绑定 | 从类型生成并绑定 schema；校验公开任务输入、恢复组件接收的模型对象 |
 | `models.private_data`（可选 string） | 需要私有评分材料时由作者填写 | 发布工具、准备入口及 ScorerHost 的 SDK 模型绑定 | 校验并恢复评分材料的类型，交给 Scorer；没有这类材料时省略 |
-| `models.environment_config`、`models.scorer_config`（各为可选 string） | 对应组件有额外参数时由作者填写 Python 模型入口 | 发布工具生成 config_schemas，提交端校验，组件构造函数读取 config.data | 定义该角色唯一配置的字段；省略时严格使用 EmptyConfig，只允许 {} |
+| `models.environment_config`、`models.scorer_config`（各为可选 string） | 对应组件有额外参数时由作者填写 Python 模型入口 | 发布工具生成 config_schemas，提交端校验，组件构造函数读取 config.data | 定义该角色唯一配置的字段；已声明入口而省略配置模型时使用 EmptyConfig；没有 scorer 入口时禁止 scorer_config |
 | `models.action`、`models.observation`、`models.state`（各为可选 string） | 环境存在相应业务数据时由作者填写 Python 模型入口 | 发布工具和 SchemaRegistry；Environment.step、Observation.data、Outcome.state 的 SDK 转换 | 生成并登记交互模型；名称只索引类型，不新增执行分支或另一套值 |
 | `internet_access`（boolean） | 脚手架默认 false；环境确需联网时作者改为 true | Server 计划解析器、Worker/Backend | 核验联网需求与后端兼容性并应用本次会话的网络限制；真实后端实施仍待验收 |
 | `required_capabilities`（string 数组） | 作者填写环境确实需要的已登记功能；无需求时为 [] | 计划解析器和 Worker 调度器 | 排除不支持所需功能的组件或 Worker；不是标签，不能填写无人检查的任意字符串 |
@@ -107,7 +111,7 @@ Python 库依赖只在 `pyproject.toml` 声明，由 Python 包管理器安装�
 | `src/my_dataset/models.py` | 文件存在时是 | 业务字段的唯一源码；位于 wheel 中，发布工具另外生成只读校验 schema |
 | `src/my_dataset/dataset_adapter.py` | 是 | 位于版本化 wheel 中 |
 | `src/my_dataset/environment.py` | 是 | 位于版本化 wheel 中 |
-| `src/my_dataset/scorer.py` | 是 | 位于版本化 wheel 中 |
+| `src/my_dataset/scorer.py` | 提供评分时是 | 位于版本化 wheel 中；仅采集且无评分器时不存在 |
 | `src/my_dataset/tools.py` | 文件存在时是 | 位于同一个 wheel 中，不单独发布另一个数据集包 |
 | 发布工具生成的 schema | 不适用 | 不是用户工程文件；按 digest 存入文件存储并由 manifest 索引，禁止手工修改 |
 | Python 实现所需的小型公开资源 | 在 pyproject 中声明为 package data 时是 | 随 wheel 保存 |
@@ -116,7 +120,7 @@ Python 库依赖只在 `pyproject.toml` 声明，由 Python 包管理器安装�
 
 因此，一个数据集代码版本在 Hub 中至少对应：一条 PackageManifest 记录、一个 wheel 文件及其 digest，以及该版本实际使用的类型引用。包新增业务类型时，Hub 还保存由发布工具生成的 schema；全部复用公共类型时只记录公共类型引用。只有包确实需要额外运行文件时，才增加 ArtifactRef。
 
-`run.yaml` 不属于数据集包。它是训练、评测或实验项目的一次运行配置，用来选择 Environment、Scorer、Agent、Backend、Model、Tools 和预算；提交时转换为 RunSpec。用户可以为同一个数据集维护多份不同的 run.yaml，也可以由训练框架直接构造 RunSpec。发布或使用数据集包都不要求存在这个文件。
+`run.yaml` 不属于数据集包。它是训练、评测、轨迹采集或其他实验项目的一次运行配置，用来选择 Environment、Scorer、Agent、Backend、Model、Tools 和预算；提交时转换为 RunSpec。用户可以为同一个数据集维护多份不同的 run.yaml，也可以由训练框架直接构造 RunSpec。发布或使用数据集包都不要求存在这个文件。
 
 Hub 逻辑上包括元数据数据库和文件存储；wheel、schema 和大文件字节都不放进数据库。标准化样本、隐藏测试和其他数据内容也不混进 wheel，它们按独立 data revision 发布并使用各自的读取权限。
 
@@ -167,7 +171,7 @@ tools.py 仅在需要新操作时添加；可以编写带参数/返回类型和�
 
 - `test_contract.py` 是开发者验证 Adapter 等代码的测试脚本；需要自定义回归测试时才添加，文件名不属于发布协议。
 - `cases.jsonl` 是这类本地测试使用的少量输入样本；也可以采用其他文件名或测试内构造数据，不是完整数据集的必需副本。
-- 编程任务的隐藏评分测试属于正式 private_data 或其 ArtifactRef，必须随数据版本提供；不能因为省略开发用 tests 目录而省略这些评分材料。
+- 需要评分的编程任务，其隐藏评分测试属于正式 private_data 或其 ArtifactRef，必须随数据版本提供；不能因为省略开发用 tests 目录而省略这些评分材料。
 
 省略目录不等于省略验证。发布工具应执行通用结构、模型、入口和 Python 安装依赖检查；作者按需要补充针对业务正确性的测试。依赖样本的行为检查从明确提供的样本输入读取，不强制扫描 tests/cases.jsonl。
 
@@ -243,7 +247,7 @@ entrypoints:
   scorer: gsm8k.scorer:Gsm8kScorer
 ```
 
-一个 run 只选择一个专属 Scorer。每个得到最终 Outcome 的 attempt 至多产生一个 ScoreResult；Server 只接纳一个 attempt 的结果作为 episode 的权威 ScoreResult。评测与后训练复用其中的 reward；升级规则时发布新的 Scorer 组件版本并创建新 run，不在同一 run 中配置两套评分器。
+一个 run 至多选择一个专属 Scorer；评测与训练必选，轨迹采集可省略。每个得到最终 Outcome 的 attempt 至多产生一个 ScoreResult；Server 只接纳一个 attempt 的结果作为 episode 的权威 ScoreResult。评测与后训练复用其中的 reward；升级规则时发布新的 Scorer 组件版本并创建新 run，不在同一 run 中配置两套评分器。
 
 Scorer 只处理一条 episode，不接收整批结果。平均 reward、成功率、完成数和错误数由系统根据已保存的 ScoreResult 统一计算，属于查询和报表，不回写单条 reward。macro-F1、pass@k 等需要联合多条结果计算的特殊报表，由评测框架或分析程序读取导出的结果后计算；首版数据集包不提供另一种聚合扩展入口。
 
@@ -279,7 +283,7 @@ prepare 工具负责数据集 revision、task_id 和 input_digest。SDK 在进�
 
 源数据无 ID 时，Adapter 应从规范化后的公开输入计算稳定内容摘要作为 sample_id；完全相同但必须区分的重复行，数据作者需要在源数据中补稳定 ID，prepare 会拒绝重复 sample_id。不能依赖临时行号、文件绝对路径或随机值。PubMedQA 的外层 JSON key 在导入时作为 id，OlymMATH 的语言/难度从原记录或明确的数据发布配置写入，不能由 Worker 猜测。配对正确性由受信 Adapter/prepare 负责；同类型材料并不意味着适用于同一道题。
 
-Worker 在执行开始前校验 private_data 的已注册 schema，并在交互阶段保持隔离；得到最终 Outcome 后才将它放入 ScoreInput。Environment 和 Agent 只接收公开 TaskSpec；隐藏测试的读取能力只提供给评分器。整个 episode_request.json 含有私有数据，不能作为公共任务文件给 Agent 或写入公开日志。本地验证的是接口与数据副本边界，生产进程和存储隔离仍需实现。
+只有配置 scorer 的计划才包含 private_data。无评分采集不解析或下载评分材料；有评分时 Worker 在执行开始前校验 private_data 的已注册 schema，并在交互阶段保持隔离；得到最终 Outcome 后才将它放入 ScoreInput。Environment 和 Agent 只接收公开 TaskSpec；隐藏测试的读取能力只提供给评分器。整个 episode_request.json 含有私有数据，不能作为公共任务文件给 Agent 或写入公开日志。本地验证的是接口与数据副本边界，生产进程和存储隔离仍需实现。
 
 ### 5.3 内置数据集的原始字段映射
 
@@ -300,7 +304,7 @@ OlymMATH easy/hard 和 en/zh 用字段组合表示；它们共享同一个 adapt
 
 评分规则可复用 `reference/shared/src/uenv_reference_rules` 中的函数，数据集 Scorer 仍直接继承系统 Scorer。文本规则显式读取参考文本；代码规则通过 ScoringContext 请求 harness。OlymMATH 的 reference-corrected-v1 包含未知 LaTeX 命令归一化修正，仍需官方语料对照；规则迁移与版本要求见[重构计划第 3.5 节](../development/source_refactoring_plan.md#35-数据集评分和-openhands)。
 
-## 6. 三个类的职责与运行阶段
+## 6. 组件类的职责与运行阶段
 
 | 类 | 负责 | 运行阶段 |
 |---|---|---|
@@ -318,7 +322,7 @@ Environment.step 是否需要覆盖取决于交互规则；公共接口的存在
 
 ## 7. 简洁与通用如何同时实现
 
-- 脚手架生成三个文件、类名和 manifest 入口，减少机械填写；不省略专属类。
+- 脚手架生成 Adapter、Environment 的文件、类名和入口；需要评分时再生成 Scorer，已提供入口仍使用专属类。
 - 基类提供真实可复用的默认行为，公共模块提供转换、渲染和评分辅助；用户只覆盖差异。
 - 类型只定义一次：核心系统类型来自 proto；数据集新增字段来自本包 models.py；发布生成物不手改。
 - 通用性由 Observation、Transition、Outcome、ScoreInput 等完整协议保证，不把所有输入都压成字符串。
@@ -334,7 +338,7 @@ QA 的 Environment 直接实现 reset 来呈现题目，不增加问答中间基
 2. 每个类的直接父类必须是对应系统基类，并且不是未实现抽象方法的类。
 3. manifest 指向本包对应类；导入别名或共享类直连不能替代该入口。
 4. 使用公共函数复用后仍通过原有数据转换与评分用例，并由统一 Rust EpisodeSupervisor 契约测试检查，不因新包装改变评分事实。
-5. 包内其他文件可以按需增减；三个专属类和文件作为稳定入口保留。
+5. 包内其他文件可以按需增减；已有九个包的三个专属类和文件作为稳定入口保留；新增仅采集包允许省略 Scorer。
 6. 每个发布字段和业务子字段都有填写方、实际读取方及可观察的作用；仅保存、转发或校验不算完成。无用途字段与对应示例删除，计划内功能须验证消费路径后验收。
 7. 精简后的 dataset.yaml 经过同一个加载器、发布转换和契约校验；参考加载器、九个示例包和生成 manifest 必须同步。
 
@@ -342,7 +346,7 @@ QA 的 Environment 直接实现 reset 来呈现题目，不增加问答中间基
 
 ## 9. 内置数据集的继承关系
 
-每个数据集都有自己的 Adapter、Environment、Scorer。下面按职责分别画出九个数据集的全部入口，不能把某一张图中的一个数据集类理解为其他数据集共用的入口。空心三角箭头 `<|--` 指向父类。
+以下九个内置数据集均提供评分，所以每个都有自己的 Adapter、Environment、Scorer。下面按职责分别画出九个数据集的全部入口，不能把某一张图中的一个数据集类理解为其他数据集共用的入口。空心三角箭头 `<|--` 指向父类。
 
 **Adapter：九个数据集分别继承 DatasetAdapter。**
 
@@ -406,7 +410,7 @@ classDiagram
 
 所有数据集 Scorer 均直接继承 Scorer，统一实现 score(request, context) -> ScoreResult；不设文本或测试执行中间评分基类，也不继承其他数据集的 Scorer。文本提取、答案比较、测试执行和报告转换通过公共函数或组合组件复用，一个评分器可以组合多种评分方式。
 
-当前参考代码中，文本评分器调用 `read_reference_text` 与 `uenv_reference_rules` 包中的规则函数；代码/SWE 评分器调用 `evaluate_harness`，由 ScoringContext 提供受控测试执行能力。每个进入评分的 attempt 由 Rust `run_score` 至多调用一次 `Scorer.score`，不按数据集、评测或训练分支。一个 RunSpec 只选择一个 Scorer；升级规则时发布新的组件版本并创建新的 run，不能让评测端和训练端各选一套评分配置。
+当前参考代码中，文本评分器调用 `read_reference_text` 与 `uenv_reference_rules` 包中的规则函数；代码/SWE 评分器调用 `evaluate_harness`，由 ScoringContext 提供受控测试执行能力。每个进入评分的 attempt 由 Rust `run_score` 至多调用一次 `Scorer.score`，不按数据集、评测或训练分支。一个 RunSpec 至多选择一个 Scorer，未选择时不评分；升级规则时发布新的组件版本并创建新的 run，不能让评测端和训练端各选一套评分配置。
 
 **Agent 独立于数据集，按运行参数选择。**
 
@@ -424,4 +428,4 @@ classDiagram
 
 OpenHandsAdapter 是待接入统一接口的 Agent 包装类，不是 DatasetAdapter，也不表示现有 SDK 已经继承 UEnv AgentRunner。CounterEnvironment 和 ProgressScorer 是额外的本地有状态测试示例，分别直接继承 Environment 和 Scorer，不属于上述九个数据集入口。
 
-manifest 必须指向本包实际声明的三个类。仅导入公共类并改名不算专属类；Adapter、Environment、Scorer 分别实现 normalize、reset、score，方法体可以调用共享函数。
+manifest 必须指向本包实际声明的入口类；scorer 入口可以省略。仅导入公共类并改名不算专属类；Adapter、Environment、Scorer 分别实现 normalize、reset、score，方法体可以调用共享函数。

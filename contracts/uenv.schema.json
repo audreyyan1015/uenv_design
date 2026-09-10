@@ -625,10 +625,10 @@
           "minimum": 1,
           "description": "从 Server 接收起的总预算，包含排队及评分"
         },
-        "score_reserve_ms": {
+        "finalize_reserve_ms": {
           "type": "integer",
           "minimum": 0,
-          "description": "为结果收集、冻结及最终评分预留预算；三者共享总截止时间"
+          "description": "为结果收集、冻结及可选评分预留时间；无评分也保留，全部共享总截止时间"
         },
         "max_generations": {
           "type": "integer",
@@ -653,7 +653,7 @@
       },
       "required": [
         "total_timeout_ms",
-        "score_reserve_ms",
+        "finalize_reserve_ms",
         "max_generations",
         "max_tool_calls",
         "max_environment_steps",
@@ -751,10 +751,11 @@
         },
         "purpose": {
           "type": "string",
-          "description": "作业用途",
+          "description": "结果用途；不决定评分算法",
           "enum": [
             "evaluation",
-            "training"
+            "training",
+            "trajectory_collection"
           ]
         },
         "environment": {
@@ -773,7 +774,7 @@
         },
         "scorer": {
           "$ref": "urn:uenv:vnext:contracts#/$defs/ComponentSpec",
-          "description": "本次运行唯一评分器；评测与后训练复用它产生的同一个 ScoreResult"
+          "description": "唯一评分配置；评测和训练必填，轨迹采集可省略；省略即不评分，不接受 null"
         },
         "backend": {
           "$ref": "urn:uenv:vnext:contracts#/$defs/BackendSpec"
@@ -796,7 +797,7 @@
         },
         "training": {
           "$ref": "urn:uenv:vnext:contracts#/$defs/TrainingSpec",
-          "description": "仅 purpose=training 时必填；purpose=evaluation 时禁止出现"
+          "description": "仅 purpose=training 时必填；评测和轨迹采集时禁止出现"
         },
         "runtime": {
           "$ref": "urn:uenv:vnext:contracts#/$defs/RuntimeSpec",
@@ -810,7 +811,6 @@
         "environment",
         "agent",
         "tools",
-        "scorer",
         "backend",
         "model",
         "limits",
@@ -838,6 +838,23 @@
                 "training"
               ]
             }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "purpose": {
+                "enum": [
+                  "evaluation",
+                  "training"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "scorer"
+            ]
           }
         }
       ]
@@ -1012,10 +1029,11 @@
         },
         "purpose": {
           "type": "string",
-          "description": "作业用途",
+          "description": "结果用途；不决定评分算法",
           "enum": [
             "evaluation",
-            "training"
+            "training",
+            "trajectory_collection"
           ]
         },
         "model": {
@@ -1026,7 +1044,7 @@
         },
         "training": {
           "$ref": "urn:uenv:vnext:contracts#/$defs/TrainingSpec",
-          "description": "仅 purpose=training 时必填；purpose=evaluation 时禁止出现"
+          "description": "仅 purpose=training 时必填；评测和轨迹采集时禁止出现"
         },
         "environment": {
           "type": "object",
@@ -1172,7 +1190,6 @@
         "environment",
         "agent",
         "backend",
-        "scorer",
         "attempt_id",
         "tools",
         "required_capabilities",
@@ -1199,6 +1216,39 @@
             "not": {
               "required": [
                 "training"
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "purpose": {
+                "enum": [
+                  "evaluation",
+                  "training"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "scorer"
+            ]
+          }
+        },
+        {
+          "if": {
+            "not": {
+              "required": [
+                "scorer"
+              ]
+            }
+          },
+          "then": {
+            "not": {
+              "required": [
+                "private_data"
               ]
             }
           }
@@ -1593,7 +1643,7 @@
         },
         "score": {
           "$ref": "urn:uenv:vnext:contracts#/$defs/ScoreResult",
-          "description": "episode 结束后产生的唯一正式评分结果"
+          "description": "仅实际评分时产生；无评分省略，Server 结合 ExecutionPlan 校验应有评分，不能伪造零分"
         },
         "outcome": {
           "$ref": "urn:uenv:vnext:contracts#/$defs/Outcome"
@@ -1651,8 +1701,7 @@
             "required": [
               "started_at_ms",
               "trajectory_ref",
-              "outcome",
-              "score"
+              "outcome"
             ]
           }
         }
@@ -2370,13 +2419,12 @@
         },
         "scorer": {
           "type": "string",
-          "description": "唯一单条 episode Scorer 实现；评测与后训练共用"
+          "description": "提供评分时声明的专属 Scorer 入口；仅采集的包可省略"
         }
       },
       "required": [
         "dataset_adapter",
-        "environment",
-        "scorer"
+        "environment"
       ],
       "additionalProperties": false
     },
@@ -2411,7 +2459,7 @@
         },
         "config_schemas": {
           "type": "object",
-          "description": "同一包内两个运行角色各自接受的配置 schema；角色名就是唯一索引",
+          "description": "已声明运行角色各自接受的配置 schema；scorer 与同名入口同时出现或省略",
           "properties": {
             "environment": {
               "type": "string",
@@ -2423,8 +2471,7 @@
             }
           },
           "required": [
-            "environment",
-            "scorer"
+            "environment"
           ],
           "additionalProperties": false
         },
@@ -2474,7 +2521,40 @@
         "provided_tools",
         "schemas"
       ],
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "entrypoints": {
+                "required": [
+                  "scorer"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "config_schemas": {
+                "required": [
+                  "scorer"
+                ]
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "config_schemas": {
+                "not": {
+                  "required": [
+                    "scorer"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      ]
     },
     "WorkerRegistration": {
       "type": "object",

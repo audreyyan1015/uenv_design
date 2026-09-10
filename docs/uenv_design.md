@@ -15,7 +15,7 @@
 
 ## 1. 系统目标与范围
 
-UEnv 为评测程序和训练框架提供统一的任务执行服务。它接收任务与运行配置，运行指定智能体，计算评分，返回结果和真实交互记录。
+UEnv 为评测、在线训练接入和轨迹采集提供统一的任务执行服务。它接收任务与运行配置，运行指定智能体，按显式配置决定是否评分，返回结果和真实交互记录。
 
 目标范围包括单轮问答、多轮环境交互、代码生成和仓库修复。用户可以选择 PlainAgent、OpenHands 或自定义 AgentRunner，以及 Process、Docker、Podman 后端。组件组合必须满足运行依赖和平台隔离要求。
 
@@ -23,11 +23,11 @@ UEnv 负责执行与评分，Trainer 负责优化器、梯度更新和模型参�
 
 所有数据集遵守以下规则：
 
-1. 每个 episode 都经过 Agent，再对最终产物评分；正式服务不接受绕过 Agent 的独立重评分作业。
+1. 每个 episode 都经过 Agent；配置了 Scorer 才对最终产物评分；正式服务不接受绕过 Agent 的独立重评分作业。
 2. 数据集差异由 Python 扩展实现，Bridge、Server、Worker 的公共流程不根据数据集名称分支。
 3. 数据集、Agent、工具和后端分别选择，兼容性不足时明确报错。
 4. 用户配置由 Server 解析为唯一执行计划，Worker 只读取该计划。
-5. 评测与训练消费同一份评分和原始轨迹。
+5. 评测、训练与轨迹采集使用同一套轨迹；实际评分时共用同一个 ScoreResult。
 6. 任务、权限、进程与事务边界保留；没有独立职责的转发类不另行建立。
 
 首版采用一个有效 Server 实例和可水平扩展的 Worker。每条任务由一个 AgentRunner 驱动；多智能体协作、无限持续任务和任意步骤恢复不属于当前承诺范围。
@@ -195,18 +195,22 @@ sequenceDiagram
     W-->>A: 已记录的操作结果
   end
   A-->>W: 候选Outcome
-  W->>W: finalize，冻结候选，保存评分快照
-  W->>Q: score(ScoreInput)
-  Q-->>W: 评分业务字段
-  W->>W: 校验评分，首次清理，封存轨迹
+  W->>W: finalize，冻结候选
+  opt ExecutionPlan 配置了 scorer
+    W->>W: 保存评分快照
+    W->>Q: score(ScoreInput)
+    Q-->>W: 评分业务字段
+    W->>W: 校验评分
+  end
+  W->>W: 首次清理，封存轨迹
   W->>S: 持久化后上报EpisodeResult
   S->>S: 事务提交唯一终态
   S-->>W: ACK
   S-->>B: 结果
-  B-->>U: 评测结果或训练样本
+  B-->>U: 评测结果、训练样本或采集轨迹
 ```
 
-接收凭据表示请求已被保存，不表示执行完成。正常流程先得到候选再评分；失败、取消和无法形成合法候选的情况按第 10 章处理。
+接收凭据表示请求已被保存，不表示执行完成。正常流程先收集最终产物，再按 scorer 是否配置决定评分；失败、取消和无法形成合法候选的情况按第 10 章处理。
 
 ### 4.2 发布与数据准备
 
@@ -261,13 +265,16 @@ flowchart TB
   COLLECT --> TRACE[TraceLoader.load<br/>读取对应轨迹]
   TRACE --> PURPOSE{运行用途}
   PURPOSE -->|评测| EVAL[返回评测结果与轨迹]
+  PURPOSE -->|轨迹采集| EXPORT[返回结果和统一轨迹引用<br/>按需读取、导出]
   PURPOSE -->|训练| TRAIN[TrainingSampleBuilder.build<br/>检查训练数据完整性与版本]
   TRAIN --> OUTPUT[VerlAdapter.to_framework_output<br/>交给 Trainer]
 ```
 
-图中是任务提交与结果返回。训练时模型调用的完整路径是 `Agent → Worker AgentRuntime/ModelProvider → ModelGateway → Trainer 推理服务`；评测则由同一个 Worker ModelProvider 连接外部模型端点。Bridge 的提交函数不生成回答；同步或异步只改变等待、消费结果的方式。
+图中是任务提交与结果返回。训练时模型调用的完整路径是 `Agent → Worker AgentRuntime/ModelProvider → ModelGateway → Trainer 推理服务`；评测和轨迹采集也由同一个 Worker ModelProvider 连接所配置的模型端点。Bridge 的提交函数不生成回答；同步或异步只改变等待、消费结果的方式。
 
 build_episode_request 接收标准公开 TaskSpec、种子及可选 private_data，生成成员 request_id/episode_id。build_batch_request 将一份完整 RunSpec 放入 run_spec，将这些成员放入 episodes；整批只生成一个 batch_id，各成员复用它并用从 0 开始的 sample_index 定位。EpisodeRequest 没有 run_id 或配置覆盖字段，ExecutionPlan.run_id 从批次 RunSpec 派生。BatchReceipt 返回 batch_id 及已接纳的 episode_ids。原始字段转换仅发生在准备阶段，不在请求构建中判断数据集或猜测字段。
+
+无 scorer 时，Bridge 组装批次前省略成员的 private_data，不为采集单独准备答案或隐藏测试。源 JSONL 已含 private_data 时可直接复用公开 task；Server 对直接提交的受控请求也只把有 scorer 时所需的私有材料放入 ExecutionPlan，无 scorer 时不解析 harness、不下发私有材料。已有源数据文件仍受原权限控制。
 
 用户自带数据与 Hub 数据均先按第 9 章在准备入口确定唯一内容来源，到上述函数时已是相同的 task/private_data；Server 和 Worker 不再分别补齐同一份样本字段。
 
@@ -330,11 +337,13 @@ flowchart TB
   AG --> EVENTS[Rust TrajectoryWriter：接收并排序真实事件]
   AG --> FINAL[Environment.finalize：返回最终候选产物]
   FINAL --> TF[ToolHost.freeze：拒绝迟到工具调用]
-  TF --> FREEZE[Backend.freeze：固定只读评分视图]
-  FREEZE --> PRE[Rust TrajectoryWriter：保存评分前快照]
+  TF --> FREEZE[Backend.freeze：固定最终产物]
+  FREEZE --> HAS{ExecutionPlan 是否配置 scorer}
+  HAS -->|是| PRE[Rust TrajectoryWriter：保存评分前快照]
+  HAS -->|否| CLEAN
   PRE --> SCORE[受管 Python Scorer：计算业务评分字段]
   SCORE --> VALIDATE[Rust Worker：补全并校验 ScoreResult]
-  VALIDATE --> CLEAN[Rust EpisodeScope：按 Scorer→Agent→Tool→Environment→Backend 清理]
+  VALIDATE --> CLEAN[Rust EpisodeScope：按 Scorer→Agent→Tool→Environment→Backend 清理已创建资源]
   CLEAN --> TERMINAL[Rust TrajectoryWriter：写 terminal 并封存最终轨迹]
   TERMINAL --> REPORT[Rust ResultReporter：持久化并上报结果]
   ENV -.->|失败、取消、超时| ERR[保存错误和已有轨迹]
@@ -343,6 +352,8 @@ flowchart TB
   SCORE -.->|评分异常| ERR
   ERR --> CLEAN
 ```
+
+没有 scorer 时不创建 ScorerHost、不生成 scoring_checkpoint、不记录 score 事件；finalize、freeze、首次清理、terminal 和最终轨迹封存仍正常执行。运行代码只检查 plan.scorer 的存在性，不按 purpose 或 dataset 编写另外一条生命周期。
 
 所有阶段的失败统一进入清理。资源关闭、失败后的清理重试和结果重传规则见第 10.3 节。
 
@@ -355,8 +366,8 @@ flowchart TB
 5. EnvironmentHost 先按 package 的 environment config schema 校验 `plan.environment.config`，把唯一 `config.data` 传给 Environment 构造函数，并绑定必填 session。随后 `ToolHost.prepare(plan.tools, session, remaining_ms)` 绑定工具并返回实际可路由表；Rust 要求它与 ExecutionPlan.tools 一致。再由 `AgentHost.prepare(plan.agent, plan.tools, remaining_ms)` 按相同约定初始化 Agent SDK，并返回实际模型可见表；Rust 同样要求它与 ExecutionPlan.tools 一致。Scorer 与 ToolExecutor 构造也使用各自已校验的唯一 config.data。两个工具返回表只是运行时核验结果，不是两份生效配置。
 6. Agent 实例只获得公开 TaskSpec 与受控 AgentContext，Environment 实例只获得锁定 Environment、sandbox 工具和当前 session 的 EnvironmentContext。命令不传完整 ExecutionPlan，也不携带另一份后端、模型、工具或超时覆盖字段。两次工具核验成功后才执行 `Environment.reset()`，再调用一次 `AgentRunner.run()`；PlainAgent 无工具单轮也走相同顺序。
 7. Agent 的模型、工具和环境操作通过 SDK 适配层请求 Rust Worker。`BudgetEnforcer` 与 `ToolGateway` 做权威计数和准入，`TrajectoryWriter` 接收真实模型、工具、动作与观测事件；Python 不分配最终事件序号，也不能自行封存或删除轨迹。
-8. Environment host 调用 `Environment.finalize()` 后将最终 Outcome 返回 Rust Supervisor。Supervisor 用评分剩余预算依次调用 `ToolHost.freeze(remaining_ms)` 拒绝新的工具请求，再调用 `Backend.freeze(remaining_ms)` 固定只读评分视图；之后才允许生成 scoring checkpoint。正式测试基于冻结候选建立评分工作区，私有测试不写回 Agent 工作区。
-9. Rust `TrajectoryWriter` 保存评分前快照；Supervisor 只把唯一 ScoreInput 和获准材料交给 ExecutionPlan.scorer 指定的 Python Scorer。Scorer 返回业务字段后，Rust 补全 status/scorer/error 并执行数值、身份和跨字段校验。传输边界必须执行完整协议校验。ScoreInput.trajectory_ref 指向评分前快照；评测汇总与后训练复用同一个 ScoreResult。
+8. 三种用途均由 Environment host 调用 `Environment.finalize()` 后将最终 Outcome 返回 Rust Supervisor。Supervisor 用评分剩余预算依次调用 `ToolHost.freeze(remaining_ms)` 拒绝新的工具请求，再调用 `Backend.freeze(remaining_ms)` 固定只读评分视图；之后才允许生成 scoring checkpoint。正式测试基于冻结候选建立评分工作区，私有测试不写回 Agent 工作区。
+9. 仅配置 scorer 时，Rust `TrajectoryWriter` 保存评分前快照；Supervisor 只把唯一 ScoreInput 和获准材料交给 ExecutionPlan.scorer 指定的 Python Scorer。Scorer 返回业务字段后，Rust 补全 status/scorer/error 并执行数值、身份和跨字段校验。传输边界必须执行完整协议校验。ScoreInput.trajectory_ref 指向评分前快照；评测汇总与后训练复用同一个 ScoreResult。
 10. Rust `EpisodeScope.finish()` 固定按 ScorerHost → AgentHost → ToolHost → EnvironmentHost → Backend 完成首次关闭；各端口 close 必须幂等，一步失败仍继续关闭后续资源。异常或取消触发同一路径。清理失败写入 cleanup 错误并进入有限重试队列，不把不干净实例放回复用池。
 11. Rust 写 terminal 并调用 `TrajectoryWriter.seal()`；writer 一旦发现事件或 checkpoint 写入失败，就自动形成 final_partial，否则形成 final_complete。随后目标 Worker 把 EpisodeResult 写入 durable outbox，由 `ResultReporter.report()` 重传直到 Server ACK。后续清理重试不修改已形成的 score、manifest 或 EpisodeResult.cleanup_status。
 
@@ -450,11 +461,11 @@ RunSpec 的 environment 到计划中仍叫 environment，tools 仍叫 tools；�
 
 数据集 `PackageManifest` 是发布/安装元数据。它登记 Adapter、Environment、Scorer 入口、各角色 config schema、任务 schema、默认 runtime 和 internet_access；独立 Agent 和工具分别使用 `AgentManifest`、`ToolSpec` 发布。PlanResolver 只沿 RunSpec 已选的角色引用查询可信目录。数据集 Environment 与 Scorer 可以引用同一个包坐标，再按角色取得 manifest 中不同入口；它们仍分别使用 `RunSpec.environment` 与 `RunSpec.scorer`，不存在一个 package 参数同时暗中覆盖两项选择。
 
-同一 run 共享一套环境与评分组件配置。不同样本可以共享它，但都必须满足这些组件支持的任务 schema；若 GSM8K 与 SWE 需要不同专属 Environment/Scorer，就创建不同 run，由 Bridge 同时管理。Worker 不能根据 dataset 名称临时更换组件。同一任务多次采样使用不同 episode_id。正常执行只有 `attempt_id=1`；发生允许重试的基础设施故障时，Server 保留 episode_id 并增加 attempt_id，用户不填写该字段。
+同一 run 共享一套环境配置及可选的评分组件配置。不同样本可以共享它，但都必须满足这些组件支持的任务 schema；若 GSM8K 与 SWE 需要不同专属 Environment/Scorer，就创建不同 run，由 Bridge 同时管理。Worker 不能根据 dataset 名称临时更换组件。同一任务多次采样使用不同 episode_id。正常执行只有 `attempt_id=1`；发生允许重试的基础设施故障时，Server 保留 episode_id 并增加 attempt_id，用户不填写该字段。
 
 Server 随批次保存 RunSpec、EpisodeRequest 及批次关联，用于审计、幂等与恢复。同一 run_id 的完整 RunSpec 不可变，后续批次必须再次携带相同配置；不一致拒绝，变更配置需使用新的 run_id。任务 request_id 的幂等比较必须包含所属 run_id，不能借复用身份切换配置。request_id、batch_id、sample_index 不进入执行计划；retry 由 Server 消费，不向 Worker 提供第二个重试决策入口。计划中的 task 不含私有材料引用；完整计划不能直接传给 Environment/Agent 或写入公开轨迹。
 
-`purpose` 与 `training` 的组合没有第三种解释：`purpose=training` 时 `training` 必填，`purpose=evaluation` 时 `training` 必须省略。purpose 只选择结果消费方；training 只约束训练所需的模型版本和 token 轨迹，不改变 Scorer、ScoreInput 或 reward 算法。
+`purpose` 取 evaluation、training 或 trajectory_collection。training 配置仅在 purpose=training 时必填，另外两种用途禁止提供。evaluation/training 必须选择 scorer；trajectory_collection 可省略 scorer。是否评分唯一取决于 scorer 是否配置，purpose 只选择结果用途并校验合法组合，不改变评分算法。不增加 enable_scoring、collect_only 或采集专用配置类。
 
 `trajectory_retention_days` 也是 Server/ArtifactStore 的保存策略，只在 RunSpec 出现并由服务端存储管理消费，不复制到 ExecutionPlan。Worker 始终记录完整的标准事件；summary 只是查询端可生成的派生视图，不是执行配置，也不能改变训练事实。
 
@@ -542,7 +553,7 @@ UEnv 系统协议的唯一可编辑来源是 `contracts/proto/uenv/v1/*.proto`�
 
 普通作者在 models.py 中定义业务类型，通过类型标注、IDE 和 `uenv describe` 查看字段。用户不创建 `schemas/` 源码目录，也不手写 `TypedConfig` 或 `schema_ref`。工具对确定的系统字段遮蔽报错，对可能重复的字段给出提示；timeout 与 allowed_time 是否同义无法百分之百自动判断。
 
-额外语义校验不能只靠 JSON Schema：TaskSpec.input schema 必须与包声明一致；tool_call/result 必须配对；完整轨迹 sequence 唯一连续，部分恢复轨迹保留原序号与缺口；token/logprob/mask 等长；policy version 与生成实际响应一致；score error 时 reward/success 为空；tests_passed <= tests_run；重复请求内容摘要一致；引用 digest 对应真实内容；图片/文件引用角色权限正确。具体校验由各对象的 validator 实施。
+额外语义校验不能只靠 JSON Schema：Server 接纳结果时调用 validate_result_for_plan，依据已保存计划校验评分是否应当存在，completed 且配置了 scorer 时必须有 status=ok 的 score；未配置 scorer 时禁止出现 score。独立 EpisodeResult schema 允许 score 缺失，不意味着可以绕过计划校验。TaskSpec.input schema 必须与包声明一致；tool_call/result 必须配对；完整轨迹 sequence 唯一连续，部分恢复轨迹保留原序号与缺口；token/logprob/mask 等长；policy version 与生成实际响应一致；score error 时 reward/success 为空；tests_passed <= tests_run；重复请求内容摘要一致；引用 digest 对应真实内容；图片/文件引用角色权限正确。具体校验由各对象的 validator 实施。
 
 Python/Rust 字段、函数和模块用 snake_case，类/结构体/trait 用 PascalCase，常量用 UPPER_SNAKE_CASE；包 ID 使用稳定 namespace。系统模块按职责组织，依赖方向及逐文件分工由 [模块清单](generated/module_map.md) 规定。内部类须具备独立状态、生命周期、可替换实现或权限/进程/事务职责；请求组装等纯操作使用函数。模块导出文件不承载业务逻辑；辅助函数按具体职责归属，不集中到无界 utils 文件，也不把一个长函数拆成多个 include 文件代替职责拆分。
 
@@ -679,7 +690,7 @@ Process/Docker/Podman 统一管理计算资源；已有网页服务或远端模�
 
 模板通用性应由同一条链路上的行为覆盖验收：文本问答、上下文/表格问答、代码产物、仓库修改、需要先前状态的多轮环境、多模态观测、无固定答案但按规则评分。每项都要检查新增业务是否仅发生在扩展包、原始信息是否保留、评分是否统一进入 Worker，以及失败/取消是否沿用公共生命周期。当前范围以单一 AgentRunner 驱动的有限 episode 为主，多智能体协作、任意硬件设备和无限持续任务不能未经协议扩展与测试就宣称支持。
 
-少写代码依靠公共默认行为、复用函数和脚手架，不以省略三个专属类为手段。通用性的标准是：新增任务行为能通过已定义的扩展接口实现，且无须在主流程增加业务分支。核心缺少某项资源或传输能力时允许增加通用平台扩展，不承诺现有实现已经覆盖所有可能任务。
+少写代码依靠公共默认行为、复用函数和脚手架。已提供的入口使用数据集专属类；仅采集且没有评价规则的包可以省略 Scorer，不编写固定零分的占位评分器。通用性的标准是：新增任务行为能通过已定义的扩展接口实现，且无须在主流程增加业务分支。核心缺少某项资源或传输能力时允许增加通用平台扩展，不承诺现有实现已经覆盖所有可能任务。
 
 ## 7. 后端与资源隔离
 
@@ -805,13 +816,13 @@ runtime:
 
 用户选择 Process 的同时显式提供 image，属于配置冲突，应拒绝，不能接受后忽略；数据集默认镜像或样本镜像作为另一种可用运行方案，不等于用户显式要求本次必须消费该镜像。
 
-评分与任务共用一套镜像解析规则。正式评分使用与解析后的任务镜像兼容的隔离评分资源，并单独提供私有材料；首版按同一基础镜像准备评分工作区，所需测试依赖也必须纳入兼容性检查。若任务镜像不能满足评分依赖，计划阶段直接拒绝；Scorer 不能私自切换 Docker 镜像或后端。
+仅配置 scorer 时检查评分依赖并准备隔离评分资源；无评分采集只检查任务运行所需依赖，不下载隐藏测试或启动测试 harness。评分与任务共用一套镜像解析规则。正式评分使用与解析后的任务镜像兼容的隔离评分资源，并单独提供私有材料；首版按同一基础镜像准备评分工作区，所需测试依赖也必须纳入兼容性检查。若任务镜像不能满足评分依赖，计划阶段直接拒绝；Scorer 不能私自切换 Docker 镜像或后端。
 
 Environment host 的执行位置服从所选后端：QA + Docker 也在任务容器 session 中调用 reset/step/finalize；SWE + Process 使用本机受管 session 与独立工作区。Rust Worker 通过统一 ComponentHost 协议管理这些调用，Python 类跨容器依靠生成的 IPC/RPC 协议，不靠继承自动跨进程。Agent host 是同一进程控制实现的独立角色实例，位于 Worker 管理的 Agent 运行位置；模型请求继续经过 Rust ModelProvider。因而任务镜像只决定 Environment/sandbox 工具的运行内容，不决定 Agent 或模型服务位置。
 
 ## 8. 评分与轨迹
 
-评分描述候选完成得怎样；轨迹保存执行中实际发生的事实。二者由同一次执行产生，评测和训练读取同一结果。
+评分描述候选完成得怎样；轨迹保存执行中实际发生的事实。三种用途始终记录同一种轨迹；Scorer 是显式选择的可选执行阶段，是否必填由运行用途校验。
 
 ### 8.1 评分输入、计算与返回
 
@@ -833,7 +844,7 @@ Environment host 的执行位置服从所选后端：QA + Docker 也在任务容
 
 `ScoreResult.binary(passed)` 同时产生 success、accuracy 和 0/1 reward。一般任务可直接构造 `ScoreResult(success=..., metrics=[...], reward=...)`；该对象经 Worker 补全系统字段后才满足正式传输 schema。评分程序正常执行但答案错了，是 status=ok、success=false、reward=0；评分器异常则生成 status=error，success/reward 为 null。
 
-ScoreInput 和 ScoreResult 不含 purpose、stage，也不定义逐步正式评分。RunSpec.purpose 只决定完成后由评测汇总器还是训练器消费结果，不改变 Scorer 输入、算法或输出。进入评分前失败时 EpisodeResult.score 省略；只要已经调用 Scorer，就必须保留这一次产生的 ScoreResult，包括 status=error 的结果。每个 attempt 至多调用一次，Server 只接纳一个 attempt 的 score 作为 episode 权威评分。ScoreInput.trajectory_ref 和 EpisodeResult.trajectory_ref 都指向 TrajectoryManifest；前者的 manifest 使用 trajectory_status=scoring_checkpoint，后者使用 final_complete 或 final_partial，避免一个布尔值同时表达“尚未结束”和“事件缺失”。
+ScoreInput 和 ScoreResult 不含 purpose、stage，也不定义逐步正式评分。RunSpec.purpose 只决定完成后用于评测汇总、训练消费还是轨迹采集，不改变 Scorer 输入、算法或输出。未配置 scorer，或者进入评分前失败时，EpisodeResult.score 省略；只要已经调用 Scorer，就必须保留这一次产生的 ScoreResult，包括 status=error 的结果。每个 attempt 至多调用一次，Server 只接纳一个 attempt 的 score 作为 episode 权威评分。ScoreInput.trajectory_ref 和 EpisodeResult.trajectory_ref 都指向 TrajectoryManifest；前者的 manifest 使用 trajectory_status=scoring_checkpoint，后者使用 final_complete 或 final_partial，避免一个布尔值同时表达“尚未结束”和“事件缺失”。
 
 输入权限随这条链路保持不变：Environment/Agent 只接收公开 task；private_data 和隐藏测试读取能力只进入评分路径。EpisodeResult 返回评分结果，不包含整份 ScoreInput 或 private_data。受控请求和计划不能原样写入公开日志；evidence 与测试报告也必须按可见性授权。
 
@@ -843,31 +854,41 @@ GSM8K 示例由 Scorer 读取候选“5”和 private_data.answer=“5”，产�
 
 Scorer.score 可直接进行业务单元测试；正式评测/训练结果仍必须经过 Worker 补全与校验。ScoringContext 提供受控 read_artifact 和 run_harness，Scorer 不自行启动未受管的进程、切换后端或创建新的时间预算。
 
-### 8.2 评测与训练怎样消费同一评分
+### 8.2 评测、训练与轨迹采集
 
-ScoreResult 同时保存 success、metrics、reward 和 evidence。二元任务通常让 success 与 reward 分别为 true/1 或 false/0；连续任务可令 success 为 null，并返回连续 reward。评测读取同一个 score 做展示和批次指标，后训练把同一个 reward 与真实 token 轨迹交给 Trainer。RunSpec.purpose 只选择消费方，不得触发另一套评分器、参数或奖励计算。
+三种用途共享任务提交、Server 调度、Worker 执行和轨迹协议。评测与训练本身也采集轨迹；purpose=trajectory_collection 表示本次以保存和导出执行记录为目的，不在本次作业中驱动 Trainer 更新模型。此处 training 指当前奖励驱动的在线训练接入；采集后用于 SFT 等离线训练，不要求采集时设置 training。
 
-首版只定义一次最终正式评分。多轮中 Agent 可见的反馈由 Environment.step 的 Observation、environment_reward 或工具结果表达，并记录为交互事实；这些值不会自动覆盖最终 ScoreResult.reward。若 Scorer 希望参考过程，可读取完整的评分前轨迹，在 episode 结束时一次性计算最终 reward。
+| 项目 | evaluation | training | trajectory_collection |
+|---|---|---|---|
+| 用户目的 | 判断模型表现 | 向 Trainer 提供训练样本 | 保存、检查和导出真实交互 |
+| Agent、Environment、Backend、Tools | 同一执行链 | 同一执行链 | 同一执行链 |
+| scorer | 必填 | 必填 | 可省略；填写则实际评分 |
+| training | 禁止提供 | 必填 | 禁止提供 |
+| 评分结果 | 展示和汇总 | 原样交给 Trainer | 有评分才保存，可供下游筛选 |
+| 模型更新 | 不更新 | Trainer 更新，UEnv 不加载权重 | 本次不驱动模型更新 |
+| token/logprob/版本 | 按实际响应记录 | 按 TrainingSpec 校验 | 按实际响应记录，不强制训练字段 |
 
 ```mermaid
-flowchart LR
-  A[AgentRunner 完成交互] --> O[Environment.finalize<br/>得到最终 Outcome]
-  O --> S[本 attempt 至多调用一次 Scorer.score]
-  S --> R[一个 ScoreResult<br/>success / metrics / reward / evidence]
-  R --> E[评测：展示并聚合指标]
-  R --> T[后训练：reward + 同一条模型轨迹]
-  G[GenerationEvent<br/>token / logprob / loss_mask] --> T
+flowchart TD
+  B[Bridge 一次提交 BatchRequest] --> S[Server 保存配置、生成计划、调度]
+  S --> W[Worker 运行 Agent、Environment、工具并记录轨迹]
+  W --> O[finalize 与 freeze：收集并固定最终产物]
+  O --> Q{是否配置 scorer}
+  Q -->|是| C[生成评分前快照、评分、记录 ScoreResult]
+  Q -->|否| F[清理资源、封存轨迹、返回 EpisodeResult]
+  C --> F
+  F --> E[评测：展示并汇总]
+  F --> T[训练：校验数据和版本后交给 Trainer]
+  F --> X[采集：读取和导出轨迹]
 ```
 
-| 环节 | evaluation run | training run |
-|---|---|---|
-| Agent 与 Environment 执行 | 同一条 episode 链路 | 同一条 episode 链路 |
-| Scorer 输入、实现和调用次数 | 最终 Outcome，本 attempt 至多一次 | 最终 Outcome，本 attempt 至多一次 |
-| ScoreResult | 保存并展示 | 原样保存，同时把 reward 交给 Trainer |
-| 模型训练字段 | 可省略 token 级训练字段 | 按 TrainingSpec 要求 token、logprob、loss_mask 和策略版本 |
-| 评分错误 | 不计作答错，不进入有效评测统计 | 不计作零分，不进入训练样本 |
+无 scorer 且交互与结果收集正常完成时，execution_status=completed、score 省略；不伪造 reward=0 或 success=false。配置了 scorer 却评分失败时保留 error ScoreResult、最终产物和已有轨迹，不能按“主动不评分”报成功。配置了 scorer 却丢失应有评分时，Server 拒绝 completed 结果。失败和取消同样保留可用轨迹。
 
-Scorer 只处理一条 episode。平均 reward、成功率、完成数和错误数由系统查询层根据已保存的 ScoreResult 动态计算，不形成第二份权威评分，也不回写单条 reward。macro-F1、pass@k 等需要联合多条结果计算的特殊报表，由评测框架或分析程序从明确导出的结果集合计算；UEnv 首版不提供自定义批次聚合扩展。比较时仍必须保证结果集合使用相同 scorer 版本和失败处理政策。
+ScoreResult 保存 success、metrics、reward 和 evidence。评测与训练复用同一次评分，轨迹采集需要评分时也使用完全相同的输入、算法和输出。环境原生 environment_reward 是交互事实，不自动覆盖最终 reward。首版只提供最终正式评分，每个进入评分的 attempt 至多调用一次 Scorer；不增加逐步正式评分或独立重评分作业。
+
+Scorer 只处理一条 episode。系统查询层从已保存的结果计算完成数、成功率和平均 reward；无 score 的采集记录不进入评分统计，更不能按零分计入。macro-F1、pass@k 等特殊报表和“只导出成功轨迹”等筛选由调用方从明确结果集合生成，不回写评分或原始事件。
+
+两份公开配置分别见[只采集](../reference/runs/gsm8k_collection.yaml)和[采集并评分](../reference/runs/gsm8k_collection_scored.yaml)。它们复用 GSM8K 的 Adapter/Environment，后者选择现有 Scorer，不新增数据集类型或采集专用请求。
 
 ### 8.3 统一轨迹事件与交互记录
 
@@ -936,21 +957,23 @@ sequenceDiagram
   participant S as Scorer
   participant A as ArtifactStore
   W->>T: 持续record事件
+  opt ExecutionPlan 配置了 scorer
   W->>T: checkpoint()
   T->>A: 保存评分前JSONL分片与manifest
   W->>S: ScoreInput.trajectory_ref
   S-->>W: ScoreResult业务字段
   W->>W: 补全并校验同一个ScoreResult
   W->>T: record(score)
+  end
   W->>T: record(state{cleaning})
   W->>W: 执行首次资源清理
   W->>T: record(可选cleanup error与terminal)
   W->>T: seal(final_complete或final_partial)
   T->>A: 保存最终manifest
-  W-->>W: EpisodeResult.score与trajectory_ref
+  W-->>W: EpisodeResult.trajectory_ref与实际产生的score
 ```
 
-TrajectoryManifest 只用一个 `trajectory_status` 表达清单状态：`scoring_checkpoint` 是供本次 Scorer 读取的评分前快照；`final_complete` 是事件完整的最终轨迹；`final_partial` 是已知缺失事件的最终恢复结果。它不表达任务是否答对或执行是否成功。任务执行失败，但错误、首次清理和 terminal 均成功记录时仍为 final_complete；Worker 突然丢失导致事件缺口时才是 final_partial。Scorer 只读取 scoring_checkpoint，避免 score 事件包含自身输入。最终 manifest 再包含适用的 score、cleaning 状态、错误和 terminal 事件。
+TrajectoryManifest 只用一个 `trajectory_status` 表达清单状态：`scoring_checkpoint` 是供本次 Scorer 读取的评分前快照；`final_complete` 是事件完整的最终轨迹；`final_partial` 是已知缺失事件的最终恢复结果。它不表达任务是否答对或执行是否成功。未配置 scorer 时没有 scoring_checkpoint 和 score 事件，其他事实完整保存后仍为 final_complete。任务执行失败，但错误、首次清理和 terminal 均成功记录时仍为 final_complete；Worker 突然丢失导致事件缺口时才是 final_partial。Scorer 只读取 scoring_checkpoint，避免 score 事件包含自身输入。最终 manifest 再包含适用的 score、cleaning 状态、错误和 terminal 事件。
 
 `EpisodeResult.score` 和 `score` 事件不得分别计算。Rust Supervisor 先形成一个不可变的 `ScoreResult`，把同一个值写入两处：前者方便查询最终结果，后者保留发生顺序。`terminal` 只保存终态摘要，不包含最终 `trajectory_ref`，从而避免 manifest 摘要引用自身。
 
@@ -958,7 +981,9 @@ TrajectoryManifest 只用一个 `trajectory_status` 表达清单状态：`scorin
 
 数据集作者只实现 Observation、Transition、Outcome 和评分业务，不调用轨迹 API。普通用户从 `EpisodeResult.trajectory_ref` 加载最终 manifest；Scorer 从 `ScoreInput.trajectory_ref` 加载评分前 manifest；Trainer 读取 `generation` 事件中的真实模型数据并与同一个 `ScoreResult.reward` 配对。展示层可以裁剪或格式化派生视图，但不能覆写原始事件。
 
-失败和取消也返回已经保存的部分或完整轨迹。读取端必须验证 ArtifactRef digest、事件身份一致、`event_count` 与实际保存事件数相符、kind/payload 匹配。完整轨迹的 sequence 从 0 连续；final_partial 允许已知缺口，但序号必须保持原值、唯一且递增，不能补写或重排成完整轨迹，也不能假定末尾存在 terminal。每次 attempt 的结果与轨迹按 `(episode_id, attempt_id)` 留存，Episode 的权威结果只指 Server 最终接纳的 attempt；训练只消费该 attempt，旧 attempt 仅供审计和诊断。历史 schema 通过 `schema_version` 选择显式迁移器，不在默认读取路径中同时猜测两套字段。
+采集使用同一 TraceLoader/导出接口，不新增轨迹根类型或存储。采集记录不保证适用于任意训练算法：例如某些 SFT 数据只需消息文本，需要真实 token/logprob/策略版本的算法必须在消费前检查并拒绝不满足条件的样本，不伪造缺失信息。筛选和格式转换生成派生文件，保留原始轨迹；采集本身不自动发布新的 Hub 数据 revision。
+
+默认采集导出与训练一样选择 Server 最终接纳的 attempt，避免把基础设施重试重复计为样本；读取历史尝试需显式按 episode_id、attempt_id 选择。失败和取消也返回已经保存的部分或完整轨迹。读取端必须验证 ArtifactRef digest、事件身份一致、`event_count` 与实际保存事件数相符、kind/payload 匹配。完整轨迹的 sequence 从 0 连续；final_partial 允许已知缺口，但序号必须保持原值、唯一且递增，不能补写或重排成完整轨迹，也不能假定末尾存在 terminal。每次 attempt 的结果与轨迹按 `(episode_id, attempt_id)` 留存，Episode 的权威结果只指 Server 最终接纳的 attempt；训练只消费该 attempt，旧 attempt 仅供审计和诊断。历史 schema 通过 `schema_version` 选择显式迁移器，不在默认读取路径中同时猜测两套字段。
 
 ## 9. Hub、代码包与数据存储
 
@@ -1040,7 +1065,7 @@ Worker 只读取计划指定的版本和文件，不重新查询 latest，不下
 
 ### 10.1 失败、取消与评分状态
 
-任务答错：执行 completed，评分 ok，success=false，reward=0。评分器崩溃：评分 error，success=null，reward=null，不能伪装答错。未产生可训练 token 的结果不可进入训练。
+无评分采集正常结束：执行 completed、score 省略。有评分任务答错：执行 completed，评分 ok，success=false，reward=0。评分器崩溃：评分 error，success=null，reward=null，不能伪装答错。未产生可训练 token 的结果不可进入训练。
 
 取消：Server 持久化取消意图 -> Worker 中止 Agent 和正在执行的工具/harness -> 保存已有轨迹 -> 执行首次清理 -> 写 terminal 并封存 -> ACK。EpisodeResult.cleanup_status 记录形成结果时的首次清理结论；失败后的有限清理重试只供运维查询，不回写 score 或覆盖已接纳终态。迟到结果不能覆盖取消终态。
 
@@ -1049,7 +1074,7 @@ Worker 只读取计划指定的版本和文件，不重新查询 latest，不下
 | 输入或组件不兼容 | 否 | 接纳/准备阶段明确失败，已创建资源进入清理 |
 | 答案错误，Scorer 正常执行 | 是 | status=ok，按评分规则返回失败指标与 reward |
 | Scorer 已调用但发生异常 | 是，记录评分错误 | status=error，success/reward 为 null，不冒充答错或零分训练样本 |
-| Agent 交互预算耗尽且得到合法最终 Outcome | 可进入一次评分 | termination_reason=budget_exhausted，使用预留的评分预算 |
+| Agent 交互预算耗尽且得到合法最终 Outcome | 可进入一次评分 | termination_reason=budget_exhausted，使用预留的收尾预算；未配置 scorer 时正常收尾，不评分 |
 | 系统取消或在候选形成前失败 | 否 | 保存错误和已有轨迹，终止调用并清理 |
 | Worker 或节点丢失 | 按已持久化事实处理 | 标记已知轨迹缺口，由 Server 判断是否允许新 attempt |
 
@@ -1057,7 +1082,7 @@ Worker 只读取计划指定的版本和文件，不重新查询 latest，不下
 
 ### 10.2 重试身份、预算与租约
 
-总预算从 Server 首次接纳开始，包括排队、准备、交互及最终评分。Agent 的可用时间减去 score_reserve_ms；预留时间供 finalize 收集结果、freeze 固定评分视图及最终 Scorer 共用，不在进入评分时重新计时。所有阶段预算取剩余预算以内。ExecutionPlan 的 deadline_at_ms 是 Server 的唯一绝对截止时间；Server 派发时从它派生只减的 remaining_timeout_ms。Worker RPC 核验该值没有被放大，Supervisor 随后只用“本机单调时钟当前值 + remaining_timeout_ms”建立运行截止时间，不再用本机墙上时钟重算 deadline。Usage 表示 episode 截至当前 attempt 的累计用量，重试通过 consumed_usage 恢复，不能清零。
+总预算从 Server 首次接纳开始，包括排队、准备、交互及最终评分。Agent 的可用时间减去 finalize_reserve_ms；预留时间供 finalize 收集结果、freeze 固定最终产物及可选 Scorer 共用；不评分也保留这段时间，不在进入评分时重新计时。所有阶段预算取剩余预算以内。ExecutionPlan 的 deadline_at_ms 是 Server 的唯一绝对截止时间；Server 派发时从它派生只减的 remaining_timeout_ms。Worker RPC 核验该值没有被放大，Supervisor 随后只用“本机单调时钟当前值 + remaining_timeout_ms”建立运行截止时间，不再用本机墙上时钟重算 deadline。Usage 表示 episode 截至当前 attempt 的累计用量，重试通过 consumed_usage 恢复，不能清零。
 
 重试必须沿用已锁定的任务、private_data、seed、模型配置、组件、工具、镜像和限制，只更新 attempt_id 与对应 plan_digest；租约在 DispatchRequest 中单独颁发。截止时间不重置。Server 在重新派发时把截至上一 attempt 已确认的累计 `consumed_usage` 与当前 `remaining_timeout_ms` 放入 DispatchRequest；Worker 用二者初始化本机预算，不能通过重试获得新调用、token 或时间预算。用量不确定时按保守上界结算或不自动重试。训练的实际模型版本按明确 version_policy 处理，不能借重试隐式切换政策。
 
@@ -1065,7 +1090,7 @@ Lease 表示派发授权，不延长 episode 的执行时间。Server 在事务�
 
 ### 10.3 清理、持久化与结果上报
 
-清理和上报是两个可恢复的工作：首次清理必须在最终 terminal、manifest 与 EpisodeResult 形成前完成一次，因此 cleanup_status 有确定值；网络不通时保留待上报记录，不能因等待 ACK 一直占用容器。清理固定为 ScorerHost → AgentHost → ToolHost → EnvironmentHost → Backend；每个 close 都必须幂等，一步失败也继续关闭后续资源。清理失败进入有限重试队列，后续重试只更新资源清理记录，不改不可变 score、轨迹或已接纳终态。
+清理和上报是两个可恢复的工作：首次清理必须在最终 terminal、manifest 与 EpisodeResult 形成前完成一次，因此 cleanup_status 有确定值；网络不通时保留待上报记录，不能因等待 ACK 一直占用容器。清理固定为 ScorerHost → AgentHost → ToolHost → EnvironmentHost → Backend；只关闭已创建的资源，无评分时没有 ScorerHost；每个 close 都必须幂等，一步失败也继续关闭后续资源。清理失败进入有限重试队列，后续重试只更新资源清理记录，不改不可变 score、轨迹或已接纳终态。
 
 进程重启后：queued 任务可以重新调度；dispatched 任务先查询租约所属 Worker；无法确认旧执行已停止时先失效旧 lease 并隔离旧 session，不把不确定副作用当作未执行。新的 attempt 使用新的工作区。Worker outbox 只重报同一结果，不重跑模型。Server ACK 之前不能删除唯一结果副本。
 

@@ -6,9 +6,9 @@
 
 ## 0. 字段发现和扩展边界
 
-字段是否已有不能靠作者搜索源码或阅读生成 schema 判断，也不能把全部内部协议直接展示给普通用户。数据集作者默认只看到 `PreparedSample`、本包 `models.py` 类型和三个入口的方法参数；运行用户只看到严格分组的 RunSpec。`uenv describe PreparedSample`、`uenv describe RunSpec` 和 `uenv describe package@version:TypeName` 分别提供对应视图，Python SDK 类型提示与这些输出来自同一契约。
+字段是否已有不能靠作者搜索源码或阅读生成 schema 判断，也不能把全部内部协议直接展示给普通用户。数据集作者默认只看到 `PreparedSample`、本包 `models.py` 类型和已声明入口的方法参数；运行用户只看到严格分组的 RunSpec。`uenv describe PreparedSample`、`uenv describe RunSpec` 和 `uenv describe package@version:TypeName` 分别提供对应视图，Python SDK 类型提示与这些输出来自同一契约。
 
-数据集字段采用 HUD 的方式，在 Python `models.py` 中通过类型标注定义并生成 schema。运行配置采用 Harbor 的方式，固定为严格的 RunSpec，分组包含 Environment、Agent、Backend、Model、Tools 和 Limits，Scorer 作为同级必选配置；提交前校验类型、必填项和组合兼容性。系统对象是封闭类型，未知字段直接拒绝。只有 Adapter、Environment 或 Scorer 理解的业务内容才加入 `models.py`；需要改变系统调度、权限、模型、预算、评分生命周期或结果处理的新能力必须修改核心 proto。
+数据集字段采用 HUD 的方式，在 Python `models.py` 中通过类型标注定义并生成 schema。运行配置采用 Harbor 的方式，固定为严格的 RunSpec，分组包含 Environment、Agent、Backend、Model、Tools 和 Limits，Scorer 作为同级配置：评测和训练必填，轨迹采集可省略；提交前校验类型、必填项和组合兼容性。系统对象是封闭类型，未知字段直接拒绝。只有 Adapter、Environment 或 Scorer 理解的业务内容才加入 `models.py`；需要改变系统调度、权限、模型、预算、评分生命周期或结果处理的新能力必须修改核心 proto。
 
 EpisodeRequest、ExecutionPlan、episode_id、attempt_id、lease、input_digest、plan_digest 和 `TypedConfig.schema_ref` 是系统自动生成或传递的内部字段，不出现在普通用户模板和默认查询中。包 metadata 及其展示子字段已删除，ExecutionPlan 也不接受 metadata。
 
@@ -88,7 +88,7 @@ BatchRequest 固定包含 batch_id、run_spec、episodes；run_spec 是本批唯
 
 公开客户端只提交批次；单条执行使用只含一个成员的 BatchRequest。因此每个 EpisodeRequest 都有自己的 request_id，同时也总有 batch_id 和从 0 开始的 sample_index。三者分别表示成员幂等、批次身份和批内位置，不能互相代替。
 
-`purpose=training` 必须同时提供 `training`，`purpose=evaluation` 必须省略 `training`。这是同一份运行配置的条件约束：purpose 决定结果交给训练器还是评测汇总器，training 只描述训练所需的版本/轨迹条件，不是第二种评分模式。
+`purpose` 只接受 evaluation、training、trajectory_collection；training 仅在 purpose=training 时必填，其余用途禁止填写。evaluation/training 必须提供 scorer，trajectory_collection 可省略 scorer。是否评分只有 scorer 是否存在这一个来源；不增加 enable_scoring 或 collect_only。training 只描述在线训练接入所需版本/轨迹条件，不是第二种评分模式。
 
 绝对 `deadline_at_ms` 只保存在受信 ExecutionPlan，供 Server 审计和派发时计算剩余量。Worker RPC 拒绝被放大的 `remaining_timeout_ms`；进入 Supervisor 后，运行截止时间只由“本机单调时钟当前值 + 收到的 remaining_timeout_ms”建立，不再用本机墙上时钟重算绝对 deadline。调用 Agent、Environment、Tool 或 Scorer 子进程时只传当前剩余毫秒，子进程不能延长或重算。
 
@@ -122,7 +122,7 @@ Hub 数据格式目标见主方案第 9 章：标准化 JSONL 行复用 task: Ta
 | 环境转移上限 | max_environment_steps | Rust BudgetEnforcer 不使用 max_steps 别名 |
 | 命令环境变量 | ExecRequest.environment_variables | 不使用 environment，以免与运行组件选择混淆 |
 
-正式评分只在 attempt 得到最终 Outcome 后产生：每个 attempt 至多调用一次 Scorer，Server 只接纳一个 attempt 的结果作为 episode 权威评分。进入评分前失败没有 ScoreResult；已经调用后 status=ok/error 的结果都必须保留。ScoreInput 和 ScoreResult 不定义 RewardPolicy、StepReward、RewardAssignment、purpose 或 stage；RunSpec.purpose 只选择下游消费方。环境原生反馈 environment_reward、最终 reward、任务是否成功 success 含义不同，不能互相冒充。FrameworkSample.reward 的复制不意味着 Bridge 有权重算评分。
+配置 scorer 时，正式评分只在 attempt 得到最终 Outcome 后产生：每个 attempt 至多调用一次 Scorer，Server 只接纳一个 attempt 的结果作为 episode 权威评分。进入评分前失败没有 ScoreResult；已经调用后 status=ok/error 的结果都必须保留。ScoreInput 和 ScoreResult 不定义 RewardPolicy、StepReward、RewardAssignment、purpose 或 stage；RunSpec.purpose 只选择下游消费方。环境原生反馈 environment_reward、最终 reward、任务是否成功 success 含义不同，不能互相冒充。FrameworkSample.reward 的复制不意味着 Bridge 有权重算评分。
 
 `ScoreInput` 不含 `remaining_timeout_ms`。Scorer 的剩余时间只从 `ScoringContext` 读取；调用 harness 时再取该剩余时间与 `private_data.data.evaluation_plan.timeout_ms` 的较小值。
 
@@ -135,7 +135,7 @@ SciTab.claim 是待核验陈述，contexts 是背景证据，answer 是私有参
 - plan_digest 包括 attempt_id，因此重试摘要改变，但执行配置不变。摘要用于内容一致性，不替代可信传输、租约或权限校验。
 - plan_digest 只保存在受信 Server/Worker 计划记录中。因为它覆盖 private_data，用户可读 TrajectoryManifest 不携带该摘要，避免低熵私有答案被枚举比对。
 - total_timeout_ms 是首次接纳起的总时长；deadline_at_ms 是首次接纳时间加该时长。Server 以它计算派发时只减的 remaining_timeout_ms。Worker RPC 核验该值后，Supervisor 用本机单调时钟建立本次接收后的截止时间；运行中不把总时长重新计时，也不再依赖墙上时钟。
-- timeout_ms 是某次工具、命令或评分操作的上限，score_reserve_ms 是为最终评分保留的时长。它们不能延长总截止时间。
+- timeout_ms 是某次工具、命令或评分操作的上限，finalize_reserve_ms 是为最终评分保留的时长。它们不能延长总截止时间。
 - Usage 与 limits 中各计数按 episode 累计，重试不能清零已消费的预算。Server 通过 DispatchRequest.consumed_usage 传递已确认用量；Rust `retry_execution_plan` 固定配置与截止时间。生产持久账本、跨 Worker 恢复、未知输出用量处理和 lease fencing 尚未实现。
 - 每条 GenerationEvent.output_token_count 必填，并作为预算统计值；output_token_ids、output_logprobs、loss_mask 是可选的详细训练轨迹，存在时必须对齐且 token 数与 count 一致。TrainingSpec.require_token_trace=true 时缺少详细轨迹的结果不得进入训练，普通评测仍可保存。
 
@@ -179,3 +179,13 @@ EnvironmentTransition 仅定义 environment_step_index、observation_before、ac
 TrajectoryManifest 使用 `trajectory_status=scoring_checkpoint/final_complete/final_partial` 区分评分前快照、完整最终轨迹和缺失事件的最终轨迹，不再用 `complete` 同时表达“尚未结束”和“记录不完整”。`created_at_ms` 只表示当前 manifest 的创建时间；`event_count` 与从 0 连续的 sequence 一起校验事件数。权威轨迹始终记录完整标准事件，查询端 summary 是派生视图，不进入 RunSpec。
 
 该结构已经同步到 scripts/build_contracts.py、生成 schema、字段字典与 Rust 记录入口。校验拒绝同时携带顶层 observation/terminated 等旧字段及 transition 的双重表示。此结构不改变 ExecutionPlan 的唯一配置来源。
+
+## 7. 轨迹采集与可选评分的跨字段约束
+
+RunSpec.scorer 与 ExecutionPlan.scorer 同名传递；purpose 不隐式添加、替换或禁用评分器。Bridge 组装无评分批次时省略成员 private_data；Server 对受控请求中已有私有材料也只在配置 scorer 时解析和下发。无 scorer 的 ExecutionPlan 不允许 private_data，不解析隐藏 harness，不创建 ScorerHost。
+
+EpisodeResult.score 只在实际评分后存在，不能用空对象、null 或零分表示未评分。正常无评分采集允许 completed；有 scorer 的 completed 必须同时有 status=ok 的 score。Rust validate_result_for_plan 校验此条件和评分器身份；Server 必须结合权威计划、完整 schema 和租约检查接纳，不能仅用 EpisodeResult 的可选字段规则。评分失败仍保留 error ScoreResult 和轨迹。
+
+limits.finalize_reserve_ms 由用户填写，Rust BudgetEnforcer 从总预算扣出交互截止时间，保留给结果收集、冻结及可选评分；不增加另一份评分时间配置。不评分同样需要收尾。清理和上报继续遵循主方案的可恢复规则，不因评分跳过而省略。
+
+轨迹采集沿用 TrajectoryEvent/TrajectoryManifest/trajectory_ref；无 score 事件不表示轨迹缺失。未评分没有 scoring_checkpoint，最终按事实完整性封存为 final_complete/final_partial。默认导出权威 attempt，历史尝试显式选择；派生筛选文件不修改原始轨迹，不自动发布为 Hub 数据版本。

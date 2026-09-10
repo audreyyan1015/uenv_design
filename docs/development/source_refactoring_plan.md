@@ -236,6 +236,12 @@ Worker 当前也不只是资源启动器。EpisodeExecutor（生产源码 `uenv-
 
 迁移验收必须确认三个转换点：Bridge 只提交标准请求；Server 一次解析并锁定计划；Worker 只从派发请求执行该计划。数据集迁移只替换扩展实现，不增加提交、调度、Agent 或评分分支。旧链与新链的并存边界见第 2.2 节。
 
+轨迹采集作为本次目标协议的一部分实施：RunSpec.purpose 增加 trajectory_collection；scorer 在评测/训练必填，在采集时可省略；training 仍只用于在线训练接入。继续使用同一 BatchRequest、Worker 和轨迹协议，不引入采集专用服务。limits.finalize_reserve_ms 统一表达收集、冻结及可选评分的预留时间，协议迁移时同步替换旧评分预留字段，不保留双入口。
+
+迁移需要联动检查：Bridge 无 scorer 时不提交 private_data；Server 不解析或派发评分材料/隐藏 harness；Worker 不创建 ScorerHost 但仍完成收集、冻结、清理和轨迹封存；Server 按权威计划核验 score 应否存在。无评分的 completed 合法，配置了 scorer 却缺失应有评分的 completed 必须拒绝。只采集包允许省略 Scorer 入口，已有九个数据集继续保留原评分规则。
+
+新增验收包括无 ground truth 的采集、采集并评分、评分失败保留轨迹、缺失应有评分拒绝、无评分器入口的包、重试后默认导出权威 attempt。采集导出与筛选不修改原事件，不自动成为新的 Hub 数据版本；缺少算法必需 token/logprob 的数据必须被训练消费端拒绝。当前本地参考覆盖协议和模拟端口执行，生产导出、存储、真实模型及后端需单独验收。
+
 ## 5. 分阶段实施计划
 
 每个阶段都必须保持主分支可部署。阶段提交不能同时大范围改协议、评分规则和可靠性算法，避免出现问题后无法判断来源。

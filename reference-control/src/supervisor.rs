@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use serde_json::{Map, Value, json};
 
 use crate::contracts::{ContractSchema, array, u64_field};
-use crate::plan::{validate_execution_plan, verify_actual_tools};
+use crate::plan::{validate_execution_plan, validate_result_for_plan, verify_actual_tools};
 use crate::ports::{
     AgentHost, ArtifactStore, Backend, Cancellation, Clock, EnvironmentHost, ModelProvider,
     NEVER_CANCELLED, ScorerHost, ToolHost,
@@ -21,7 +21,7 @@ pub struct EpisodeSupervisor<'a> {
 
 struct CompletedAttempt {
     outcome: Value,
-    score: Value,
+    score: Option<Value>,
 }
 
 impl<'a> EpisodeSupervisor<'a> {
@@ -61,7 +61,7 @@ impl<'a> EpisodeSupervisor<'a> {
         dispatch: &Value,
         agent_host: &mut dyn AgentHost,
         environment_host: &mut dyn EnvironmentHost,
-        scorer_host: &mut dyn ScorerHost,
+        mut scorer_host: Option<&mut dyn ScorerHost>,
         backend: &mut dyn Backend,
         tool_host: &mut dyn ToolHost,
         model_provider: &mut dyn ModelProvider,
@@ -72,6 +72,9 @@ impl<'a> EpisodeSupervisor<'a> {
             .get("plan")
             .ok_or_else(|| ControlError::new("MISSING_EXECUTION_PLAN"))?;
         validate_execution_plan(plan, self.schema)?;
+        if plan.get("scorer").is_some() != scorer_host.is_some() {
+            return Err(ControlError::new("SCORER_HOST_MISMATCH"));
+        }
         self.check_cancelled()?;
         let required: BTreeSet<String> = array(plan, "required_capabilities")?
             .iter()
@@ -139,7 +142,7 @@ impl<'a> EpisodeSupervisor<'a> {
                 plan,
                 agent_host,
                 environment_host,
-                scorer_host,
+                &mut scorer_host,
                 backend,
                 tool_host,
                 model_provider,
@@ -151,15 +154,19 @@ impl<'a> EpisodeSupervisor<'a> {
 
         let (execution_status, error, completed) = match attempt {
             Ok(completed)
-                if completed.score.get("status").and_then(Value::as_str) == Some("ok") =>
+                if completed.score.as_ref().is_none_or(|score| {
+                    score.get("status").and_then(Value::as_str) == Some("ok")
+                }) =>
             {
                 ("completed", None, Some(completed))
             }
             Ok(completed) => {
-                let error =
-                    completed.score.get("error").cloned().unwrap_or_else(|| {
-                        error_record(&ControlError::new("SCORER_FAILED"), "score")
-                    });
+                let error = completed
+                    .score
+                    .as_ref()
+                    .and_then(|score| score.get("error"))
+                    .cloned()
+                    .unwrap_or_else(|| error_record(&ControlError::new("SCORER_FAILED"), "score"));
                 let code = error
                     .get("code")
                     .and_then(Value::as_str)
@@ -182,7 +189,10 @@ impl<'a> EpisodeSupervisor<'a> {
             json!({"phase": "cleaning"}),
             self.clock.unix_time_ms(),
         );
-        let scorer_cleanup = scorer_host.close();
+        let scorer_cleanup = match scorer_host.as_mut() {
+            Some(host) => host.close(),
+            None => Ok(()),
+        };
         let agent_cleanup = agent_host.close();
         let tool_cleanup = tool_host.close();
         let environment_cleanup = environment_host.close();
@@ -242,13 +252,15 @@ impl<'a> EpisodeSupervisor<'a> {
         ]);
         if let Some(completed) = completed {
             result.insert("outcome".to_owned(), completed.outcome);
-            result.insert("score".to_owned(), completed.score);
+            if let Some(score) = completed.score {
+                result.insert("score".to_owned(), score);
+            }
         }
         if let Some(error) = error {
             result.insert("error".to_owned(), error);
         }
         let result = Value::Object(result);
-        self.schema.validate_shape("EpisodeResult", &result)?;
+        validate_result_for_plan(&result, plan, self.schema)?;
         Ok(result)
     }
 
@@ -258,7 +270,7 @@ impl<'a> EpisodeSupervisor<'a> {
         plan: &Value,
         agent_host: &mut dyn AgentHost,
         environment_host: &mut dyn EnvironmentHost,
-        scorer_host: &mut dyn ScorerHost,
+        scorer_host: &mut Option<&mut dyn ScorerHost>,
         backend: &mut dyn Backend,
         tool_host: &mut dyn ToolHost,
         model_provider: &mut dyn ModelProvider,
@@ -329,7 +341,7 @@ impl<'a> EpisodeSupervisor<'a> {
             )
             .map_err(|error| error.in_phase("persist"))?;
         let finalize_timeout_ms = budget
-            .remaining_score_ms(self.clock)
+            .remaining_finalize_ms(self.clock)
             .map_err(|error| error.in_phase("environment"))?;
         let outcome = environment_host
             .finalize(&submitted, finalize_timeout_ms)
@@ -352,18 +364,25 @@ impl<'a> EpisodeSupervisor<'a> {
         }
 
         let tool_freeze_timeout_ms = budget
-            .remaining_score_ms(self.clock)
+            .remaining_finalize_ms(self.clock)
             .map_err(|error| error.in_phase("tool"))?;
         tool_host
             .freeze(tool_freeze_timeout_ms)
             .map_err(|error| error.in_phase("tool"))?;
         let backend_freeze_timeout_ms = budget
-            .remaining_score_ms(self.clock)
+            .remaining_finalize_ms(self.clock)
             .map_err(|error| error.in_phase("environment"))?;
         backend
             .freeze(backend_freeze_timeout_ms)
             .map_err(|error| error.in_phase("environment"))?;
         self.check_cancelled()?;
+        budget.remaining_finalize_ms(self.clock)?;
+        let Some(scorer_host) = scorer_host.as_deref_mut() else {
+            return Ok(CompletedAttempt {
+                outcome,
+                score: None,
+            });
+        };
         trajectory
             .record(
                 "state",
@@ -374,10 +393,10 @@ impl<'a> EpisodeSupervisor<'a> {
         let trajectory_ref = trajectory
             .checkpoint(self.clock.unix_time_ms(), artifacts)
             .map_err(|error| error.in_phase("persist"))?;
-        // The episode deadline and score reserve are the only scoring-time
+        // The episode deadline and finalization reserve are the only scoring-time
         // controls. A scorer package may define algorithm parameters in config,
         // but it cannot introduce a second execution timeout.
-        budget.remaining_score_ms(self.clock)?;
+        budget.remaining_finalize_ms(self.clock)?;
         let mut score_input = json!({
             "task": plan["task"],
             "outcome": outcome,
@@ -389,7 +408,7 @@ impl<'a> EpisodeSupervisor<'a> {
                 .unwrap()
                 .insert("private_data".to_owned(), private_data.clone());
         }
-        let score_deadline = budget.score_deadline_ms();
+        let score_deadline = budget.finalize_deadline_ms();
         let mut scoring_context = BackendScoringContext::new(
             backend,
             artifacts,
@@ -407,7 +426,10 @@ impl<'a> EpisodeSupervisor<'a> {
         // A valid ScoreResult is retained even if its trajectory append fails.
         // record() marks the final manifest partial in that case.
         let _ = trajectory.record("score", score.clone(), self.clock.unix_time_ms());
-        Ok(CompletedAttempt { outcome, score })
+        Ok(CompletedAttempt {
+            outcome,
+            score: Some(score),
+        })
     }
 
     fn check_cancelled(&self) -> Result<()> {
@@ -435,7 +457,7 @@ fn error_record(error: &ControlError, phase: &str) -> Value {
 }
 
 fn execution_status_for(code: &str) -> &'static str {
-    if code.ends_with("TIMEOUT") || code == "SCORE_RESERVE_REACHED" {
+    if code.ends_with("TIMEOUT") || code == "FINALIZE_RESERVE_REACHED" {
         "timeout"
     } else if code.ends_with("CANCELLED") {
         "cancelled"

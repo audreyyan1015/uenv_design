@@ -46,7 +46,7 @@ design/
 |---|---|
 | [系统设计方案](docs/uenv_design.md) | 系统职责、执行流程和对外行为 |
 | [用户指南](docs/guides/user_guide.md) | 运行、查询、取消任务，以及自定义 Agent 和工具 |
-| [数据集包模板](docs/guides/dataset_package_template.md) | 数据集文件、三个入口、样本转换、发布内容及内置示例 |
+| [数据集包模板](docs/guides/dataset_package_template.md) | 数据集文件、组件入口、样本转换、发布内容及内置示例 |
 | [字段规范](docs/development/field_conventions.md) | 命名、归属、配置单一来源与字段用途要求 |
 | [源码重构计划](docs/development/source_refactoring_plan.md) | 原有能力与源码证据、保留/修改/重写/删除、迁移和验收 |
 | [参考实现说明](docs/development/reference_implementation.md) | 当前代码对应关系、实际消费者、实现缺口与内部接入目标 |
@@ -90,3 +90,5 @@ python scripts/validate_design.py
 ```
 
 `scripts/validate_design.py` 会离线运行 Rust 控制测试和 Python 契约/评分规则测试。当前参考使用合成数据、模拟模型与内存产物存储；它没有完成真实 Docker/Podman/Process 驱动、OpenHands、MCP、官方 benchmark、RPC、持久化或生产部署。
+
+轨迹采集复用相同执行链：purpose=trajectory_collection，省略 scorer 表示不评分。参见[主方案第 8.2 节](docs/uenv_design.md#82-评测训练与轨迹采集)、[用户指南第 2.6 节](docs/guides/user_guide.md#26-轨迹采集怎样配置)，以及[只采集](reference/runs/gsm8k_collection.yaml)和[采集并评分](reference/runs/gsm8k_collection_scored.yaml)配置。对应生成请求和计划位于 reference/generated/episodes 下的同名示例目录。

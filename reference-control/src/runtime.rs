@@ -89,13 +89,13 @@ impl BudgetEnforcer {
         let deadline_at_ms = now
             .checked_add(transmitted_remaining)
             .ok_or_else(|| ControlError::new("INVALID_REMAINING_TIMEOUT"))?;
-        let score_reserve_ms = u64_field(
+        let finalize_reserve_ms = u64_field(
             plan.get("limits")
                 .ok_or_else(|| ControlError::new("MISSING_LIMITS"))?,
-            "score_reserve_ms",
+            "finalize_reserve_ms",
         )?;
         let interaction_deadline_at_ms = now
-            .checked_add(transmitted_remaining.saturating_sub(score_reserve_ms))
+            .checked_add(transmitted_remaining.saturating_sub(finalize_reserve_ms))
             .ok_or_else(|| ControlError::new("INVALID_REMAINING_TIMEOUT"))?;
         Self::from_plan_with_deadlines(plan, usage, deadline_at_ms, interaction_deadline_at_ms)
     }
@@ -124,7 +124,7 @@ impl BudgetEnforcer {
             return Err(ControlError::new("EPISODE_TIMEOUT"));
         }
         if now >= self.interaction_deadline_at_ms {
-            return Err(ControlError::new("SCORE_RESERVE_REACHED"));
+            return Err(ControlError::new("FINALIZE_RESERVE_REACHED"));
         }
         Ok(())
     }
@@ -171,7 +171,7 @@ impl BudgetEnforcer {
         Ok(())
     }
 
-    pub fn remaining_score_ms(&self, clock: &dyn Clock) -> Result<u64> {
+    pub fn remaining_finalize_ms(&self, clock: &dyn Clock) -> Result<u64> {
         let now = clock.monotonic_ms();
         if now >= self.deadline_at_ms {
             return Err(ControlError::new("EPISODE_TIMEOUT"));
@@ -180,7 +180,7 @@ impl BudgetEnforcer {
     }
 
     /// The original local monotonic deadline; scoring must never restart it.
-    pub fn score_deadline_ms(&self) -> u64 {
+    pub fn finalize_deadline_ms(&self) -> u64 {
         self.deadline_at_ms
     }
 
@@ -190,7 +190,7 @@ impl BudgetEnforcer {
             return Err(ControlError::new("EPISODE_TIMEOUT"));
         }
         if now >= self.interaction_deadline_at_ms {
-            return Err(ControlError::new("SCORE_RESERVE_REACHED"));
+            return Err(ControlError::new("FINALIZE_RESERVE_REACHED"));
         }
         Ok(self.interaction_deadline_at_ms - now)
     }

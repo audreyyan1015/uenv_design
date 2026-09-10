@@ -101,9 +101,9 @@
 | `application/dispatch_validation.rs` | validate_dispatch | lease、epoch、digest 校验；WorkerRpc 在调用 Supervisor 前维护活动 attempt 与重复派发账本 |
 | `application/session_manager.rs` | SessionManager | 创建、借用、重置、归还、作废环境资源 |
 | `application/agent_runtime.rs` | AgentRuntime | 模型、工具和环境动作的唯一受控入口；在副作用前检查预算与取消，再记录真实事件 |
-| `application/budget_enforcer.rs` | BudgetEnforcer | 权威截止时间、模型/工具/环境调用计数和评分预留 |
+| `application/budget_enforcer.rs` | BudgetEnforcer | 权威截止时间、模型/工具/环境调用计数和收尾预留 |
 | `application/tool_gateway.rs` | ToolGateway / ToolHost | 绑定 ExecutionPlan.tools 与 Backend session，按 scope 调用 Python 工具、Agent 原生工具或外部连接；预算和轨迹由 AgentRuntime 强制 |
-| `application/scoring.rs` | run_score | 每个进入评分的 attempt 至多调用一次 Python Scorer，补全并校验 ScoreResult；不包含数据集规则 |
+| `application/scoring.rs` | run_score | 仅有 scorer 时调用一次 Python Scorer；无评分跳过该阶段，结果按计划核验；不包含数据集规则 |
 | `application/trajectory_writer.rs` | TrajectoryWriter | 接收 Python 原始事件，分配顺序、校验身份、创建评分前快照并封存最终轨迹 |
 | `application/cancellation_service.rs` | CancellationService | 中止模型/工具/评分及传播取消 |
 | `application/cleanup_service.rs` | CleanupService | 统一清理与有界失败重试 |
@@ -205,14 +205,14 @@
 | `src/<package_name>/models.py` | 按需定义本包新增业务字段；构建进 wheel，发布工具自动生成只读 schema |
 | `src/<package_name>/dataset_adapter.py` | 必需：声明 DatasetNameAdapter；构建进同一个 wheel |
 | `src/<package_name>/environment.py` | 必需：声明 DatasetNameEnvironment；构建进同一个 wheel |
-| `src/<package_name>/scorer.py` | 必需：声明 DatasetNameScorer；构建进同一个 wheel |
+| `src/<package_name>/scorer.py` | 提供评分时必需：声明 DatasetNameScorer；仅采集可省略 |
 | `src/<package_name>/tools.py` | 可选 ToolExecutor；存在时构建进同一个 wheel |
 | 发布工具生成的 schema | 不属于用户工程源码；从 models.py 生成，按 digest 发布并由 manifest 索引 |
 | `tests/cases.jsonl` | 可选的本地/CI 转换与评分案例；不作为发布条件，默认不上传 Hub |
 | `tests/test_contract.py` | 可选的本地/CI 契约测试；不作为发布条件，默认不上传 Hub |
 | `tests/test_scoring.py` | 可选的本地/CI 评分测试；不作为发布条件，默认不上传 Hub |
 
-每个数据集的 dataset_adapter.py、environment.py、scorer.py 与三个专属类统一必需，其余辅助文件按需创建。三个入口类分别直接继承系统基类，并实现 normalize、reset、score；Scorer 只处理单条 episode。公共逻辑通过函数或组合复用，不复制算法。run.yaml 属于训练、评测或实验项目，不是数据集包文件。九个 `reference/datasets/*` 示例已经使用同一 `dataset.yaml + pyproject.toml + src/<package> + tests` 布局；公开运行文件位于 `reference/runs`，生成对象位于 `reference/generated`。产品侧作者 CLI 尚未在生产源码实现。
+每个数据集的 dataset_adapter.py、environment.py 与专属类必需；提供评分时再声明 scorer.py 与专属 Scorer，只有采集需求的包可省略；其余辅助文件按需创建。已提供的入口类分别直接继承系统基类，并实现 normalize、reset、score；Scorer 只处理单条 episode。公共逻辑通过函数或组合复用，不复制算法。run.yaml 属于训练、评测、轨迹采集或其他实验项目，不是数据集包文件。九个 `reference/datasets/*` 示例已经使用同一 `dataset.yaml + pyproject.toml + src/<package> + tests` 布局；公开运行文件位于 `reference/runs`，生成对象位于 `reference/generated`。产品侧作者 CLI 尚未在生产源码实现。
 
 基础组件包：packages/agents/plain、packages/agents/openhands 各含 runner.py、AgentManifest、config schema 和 contract tests；AgentManifest 只声明 supported_interfaces 与 required_tool_names。packages/tools/terminal、packages/tools/file_editor 等各含 executor.py、ToolSpec、input/output schema 和 contract tests。packages/adapters/ 下按接口提供工具适配包，每包含 adapter.py、接口声明和 contract tests；新增使用既有接口的工具不修改 Agent 包。原生状态工具的包装可与对应 Agent 作为同一分发包发布，但保持独立版本入口。共享呈现函数和评分辅助放 packages/shared，按版本依赖，禁止复制源文件到各数据集。
 

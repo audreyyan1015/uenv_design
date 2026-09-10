@@ -1,0 +1,18 @@
+{
+  "schema_version": "vnext.3",
+  "task_id": "gsm8k/demo-gsm8k",
+  "dataset": {
+    "id": "gsm8k",
+    "revision": "synthetic-design-fixture-v1",
+    "split": "example",
+    "subset": ""
+  },
+  "sample_id": "demo-gsm8k",
+  "input": {
+    "schema_ref": "uenv://packages/datasets/gsm8k/1.0.0/Gsm8kInput",
+    "data": {
+      "instruction": "There are 2 apples and 3 more arrive. How many apples?"
+    }
+  },
+  "input_digest": "sha256:a7ce7d9b3477dccfa29c8712d8113626aef2bbe5aff58d1983cb9401a677f657"
+}

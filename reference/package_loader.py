@@ -60,7 +60,8 @@ def load_package(package_dir: Path) -> dict:
     result = {"directory": package_dir, "declaration": declaration}
     result["adapter"] = load_symbol(declaration["entrypoints"]["dataset_adapter"])
     result["environment"] = load_symbol(declaration["entrypoints"]["environment"])
-    result["scorer"] = load_symbol(declaration["entrypoints"]["scorer"])
+    if "scorer" in declaration["entrypoints"]:
+        result["scorer"] = load_symbol(declaration["entrypoints"]["scorer"])
     if "input" not in declaration["models"]:
         raise ValueError("dataset.yaml models.input is required")
     for role, reference in declaration["models"].items():
@@ -82,10 +83,11 @@ def validate_declaration(declaration: dict) -> None:
             raise ValueError(f"dataset.yaml {field} must be a non-empty string")
     entries = declaration.get("entrypoints", {})
     if (not isinstance(entries, dict)
-            or set(entries) != {"dataset_adapter", "environment", "scorer"}
+            or not {"dataset_adapter", "environment"} <= set(entries)
+            or set(entries) - {"dataset_adapter", "environment", "scorer"}
             or any(not isinstance(value, str) or len(value.split(":")) != 2
                    or not all(value.split(":")) for value in entries.values())):
-        raise ValueError("entrypoints must declare dataset_adapter, environment, scorer as module:Class")
+        raise ValueError("entrypoints require dataset_adapter and environment; scorer is optional; use module:Class")
     if type(declaration.get("internet_access", False)) is not bool:
         raise ValueError("internet_access must be a boolean")
     capabilities = declaration.get("required_capabilities", [])
@@ -97,6 +99,8 @@ def validate_declaration(declaration: dict) -> None:
     if (not isinstance(models, dict) or "input" not in models or set(models) - MODEL_ROLES
             or any(not isinstance(value, str) or not value for value in models.values())):
         raise ValueError("Unknown dataset.yaml model roles")
+    if "scorer_config" in models and "scorer" not in entries:
+        raise ValueError("scorer_config requires a scorer entrypoint")
 
 
 def validate_author_package(package: dict) -> list[str]:
@@ -160,7 +164,7 @@ def build_manifest(package: dict, output: Path) -> dict:
         "task_schema": schema_ids["input"],
         "config_schemas": {
             role: schema_ids.get(role + "_config", "uenv://schemas/vnext/EmptyConfig")
-            for role in ("environment", "scorer")
+            for role in ("environment", "scorer") if role in declaration["entrypoints"]
         },
         "internet_access": declaration.get("internet_access", False),
         "required_capabilities": deepcopy(declaration.get("required_capabilities", [])),
@@ -196,6 +200,10 @@ def expand_run(public_run: dict, manifest: dict, catalog: dict, registry=None) -
         return {"schema_ref": schema_ref, "data": data}
 
     for role in ("environment", "scorer"):
+        if role == "scorer" and role not in run:
+            continue
+        if role not in manifest["entrypoints"]:
+            raise ValueError(f"Package does not provide {role}")
         selected = run[role]["implementation"]
         if any(selected.get(key) != manifest[key] for key in ("id", "version")):
             raise ValueError(f"No registered manifest for selected {role}")

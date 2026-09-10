@@ -6,7 +6,7 @@ use std::rc::Rc;
 
 use serde_json::{Value, json};
 use uenv_reference_control::contracts::ContractSchema;
-use uenv_reference_control::plan::seal_plan;
+use uenv_reference_control::plan::{seal_plan, validate_result_for_plan};
 use uenv_reference_control::ports::{
     AgentHost, ArtifactStore, Backend, Cancellation, Clock, EnvironmentHost, MemoryArtifactStore,
     ModelProvider, ScorerHost, ScoringContext, ToolHost,
@@ -368,7 +368,7 @@ fn supervisor_runs_one_uniform_path_and_completes_system_fields() {
             &dispatch(&plan),
             &mut agent,
             &mut environment,
-            &mut scorer,
+            Some(&mut scorer),
             &mut backend,
             &mut tools,
             &mut model,
@@ -560,7 +560,7 @@ fn finalization_and_scoring_use_the_reserve_without_extending_the_deadline() {
     let now = Rc::new(Cell::new(1_800_000_000_100));
     let clock = SharedClock(now.clone());
     let deadline = plan["deadline_at_ms"].as_u64().unwrap();
-    let reserve = plan["limits"]["score_reserve_ms"].as_u64().unwrap();
+    let reserve = plan["limits"]["finalize_reserve_ms"].as_u64().unwrap();
     let request = dispatch(&plan);
     let budget = BudgetEnforcer::from_dispatch(&request, &clock).unwrap();
     let supervisor = EpisodeSupervisor::new(&schema, &clock, capabilities(&plan));
@@ -579,7 +579,7 @@ fn finalization_and_scoring_use_the_reserve_without_extending_the_deadline() {
             &request,
             &mut agent,
             &mut environment,
-            &mut scorer,
+            Some(&mut scorer),
             &mut backend,
             &mut tools,
             &mut model,
@@ -591,9 +591,9 @@ fn finalization_and_scoring_use_the_reserve_without_extending_the_deadline() {
     assert_eq!(environment.finalize_timeout_ms, Some(reserve));
     assert_eq!(scorer.calls, 1);
     now.set(deadline);
-    assert_eq!(budget.score_deadline_ms(), deadline);
+    assert_eq!(budget.finalize_deadline_ms(), deadline);
     assert_eq!(
-        budget.remaining_score_ms(&clock).unwrap_err().code,
+        budget.remaining_finalize_ms(&clock).unwrap_err().code,
         "EPISODE_TIMEOUT"
     );
 }
@@ -621,7 +621,7 @@ fn environment_step_is_gated_and_recorded_by_agent_runtime() {
             &retry_dispatch,
             &mut agent,
             &mut environment,
-            &mut scorer,
+            Some(&mut scorer),
             &mut backend,
             &mut tools,
             &mut model,
@@ -662,7 +662,7 @@ fn failed_tool_call_still_records_a_paired_result() {
             &dispatch(&plan),
             &mut agent,
             &mut environment,
-            &mut scorer,
+            Some(&mut scorer),
             &mut backend,
             &mut tools,
             &mut model,
@@ -728,7 +728,7 @@ fn accepted_model_failure_has_explicit_phase_operation_and_retryability() {
             &dispatch(&plan),
             &mut agent,
             &mut environment,
-            &mut scorer,
+            Some(&mut scorer),
             &mut backend,
             &mut tools,
             &mut model,
@@ -838,15 +838,15 @@ fn scorer_cannot_set_system_owned_fields() {
 }
 
 #[test]
-fn score_reserve_and_call_limits_are_enforced_in_rust() {
+fn finalize_reserve_and_call_limits_are_enforced_in_rust() {
     let plan = plan();
     let clock = FixedClock(Cell::new(10_000));
     let mut reserve_dispatch = dispatch(&plan);
-    reserve_dispatch["remaining_timeout_ms"] = plan["limits"]["score_reserve_ms"].clone();
+    reserve_dispatch["remaining_timeout_ms"] = plan["limits"]["finalize_reserve_ms"].clone();
     let mut budget = BudgetEnforcer::from_dispatch(&reserve_dispatch, &clock).unwrap();
     assert_eq!(
         budget.begin_model(&clock).unwrap_err().code,
-        "SCORE_RESERVE_REACHED"
+        "FINALIZE_RESERVE_REACHED"
     );
 
     let mut plan = plan;
@@ -907,7 +907,7 @@ fn scorer_failure_keeps_the_frozen_outcome_and_error_score() {
             &dispatch(&plan),
             &mut agent,
             &mut environment,
-            &mut scorer,
+            Some(&mut scorer),
             &mut backend,
             &mut tools,
             &mut model,
@@ -962,7 +962,7 @@ fn environment_failure_still_closes_both_hosts_and_backend() {
             &dispatch(&plan),
             &mut agent,
             &mut environment,
-            &mut scorer,
+            Some(&mut scorer),
             &mut backend,
             &mut tools,
             &mut model,
@@ -998,7 +998,7 @@ fn tool_probe_failure_after_open_closes_all_started_resources() {
             &dispatch(&plan),
             &mut agent,
             &mut environment,
-            &mut scorer,
+            Some(&mut scorer),
             &mut backend,
             &mut tools,
             &mut model,
@@ -1032,7 +1032,7 @@ fn agent_visible_tool_mismatch_closes_all_started_resources() {
             &dispatch(&plan),
             &mut agent,
             &mut environment,
-            &mut scorer,
+            Some(&mut scorer),
             &mut backend,
             &mut tools,
             &mut model,
@@ -1102,7 +1102,7 @@ fn cancellation_after_open_uses_the_same_cleanup_path() {
             &dispatch(&plan),
             &mut agent,
             &mut environment,
-            &mut scorer,
+            Some(&mut scorer),
             &mut backend,
             &mut tools,
             &mut model,
@@ -1112,4 +1112,135 @@ fn cancellation_after_open_uses_the_same_cleanup_path() {
     assert_eq!(result["execution_status"], "cancelled");
     assert!(agent.closed && environment.closed && backend.closed && tools.closed);
     assert_eq!(scorer.calls, 0);
+}
+
+#[test]
+fn collection_uses_the_same_lifecycle_with_optional_scoring() {
+    let schema = ContractSchema::bundled();
+    for scored in [false, true] {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let name = if scored {
+            "gsm8k_collection_scored"
+        } else {
+            "gsm8k_collection"
+        };
+        let plan: Value = serde_json::from_slice(
+            &fs::read(root.join(format!(
+                "reference/generated/episodes/{name}/execution_plan.json"
+            )))
+            .unwrap(),
+        )
+        .unwrap();
+        let clock = FixedClock(Cell::new(1_800_000_000_100));
+        let supervisor = EpisodeSupervisor::new(&schema, &clock, capabilities(&plan));
+        let mut agent = AgentProbe::default();
+        let mut environment = EnvironmentProbe::default();
+        let mut scorer = ScorerProbe::default();
+        let mut backend = BackendProbe::default();
+        let mut tools = ToolHostProbe::default();
+        let mut model = ModelProbe::default();
+        let mut artifacts = MemoryArtifactStore::default();
+        let host = if scored {
+            Some(&mut scorer as &mut dyn ScorerHost)
+        } else {
+            None
+        };
+        let result = supervisor
+            .execute(
+                &dispatch(&plan),
+                &mut agent,
+                &mut environment,
+                host,
+                &mut backend,
+                &mut tools,
+                &mut model,
+                &mut artifacts,
+            )
+            .unwrap();
+        assert_eq!(result["execution_status"], "completed");
+        assert_eq!(result.get("score").is_some(), scored);
+        assert_eq!(scorer.calls, usize::from(scored));
+        assert_eq!(scorer.closed, scored);
+        assert!(result.get("outcome").is_some());
+        assert!(agent.closed && environment.closed && tools.closed && backend.closed);
+        assert!(backend.frozen && tools.frozen);
+        let manifest: Value =
+            serde_json::from_slice(&artifacts.read(&result["trajectory_ref"]).unwrap()).unwrap();
+        assert_eq!(manifest["trajectory_status"], "final_complete");
+        let mut events = Vec::<Value>::new();
+        for segment in manifest["event_segments"].as_array().unwrap() {
+            let bytes = artifacts.read(segment).unwrap();
+            for line in std::str::from_utf8(&bytes).unwrap().lines() {
+                events.push(serde_json::from_str(line).unwrap());
+            }
+        }
+        assert_eq!(
+            events.iter().filter(|e| e["kind"] == "score").count(),
+            usize::from(scored)
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|e| e.pointer("/payload/phase") == Some(&json!("scoring")))
+                .count(),
+            usize::from(scored)
+        );
+        assert!(events.iter().any(|e| e["kind"] == "generation"));
+        assert_eq!(events.last().unwrap()["kind"], "terminal");
+        let mut invalid = result.clone();
+        if scored {
+            invalid.as_object_mut().unwrap().remove("score");
+            assert_eq!(
+                validate_result_for_plan(&invalid, &plan, &schema)
+                    .unwrap_err()
+                    .code,
+                "MISSING_SUCCESSFUL_SCORE"
+            );
+        } else {
+            invalid["score"] = json!({"reward": 0});
+            assert_eq!(
+                validate_result_for_plan(&invalid, &plan, &schema)
+                    .unwrap_err()
+                    .code,
+                "UNEXPECTED_SCORE"
+            );
+        }
+    }
+}
+
+#[test]
+fn collection_scoring_failure_preserves_trace_and_is_not_success() {
+    let schema = ContractSchema::bundled();
+    let mut plan = plan();
+    plan["purpose"] = json!("trajectory_collection");
+    let plan = seal_plan(&plan).unwrap();
+    let clock = FixedClock(Cell::new(1_800_000_000_100));
+    let supervisor = EpisodeSupervisor::new(&schema, &clock, capabilities(&plan));
+    let mut agent = AgentProbe::default();
+    let mut environment = EnvironmentProbe::default();
+    let mut scorer = FailingScorer { closed: false };
+    let mut backend = BackendProbe::default();
+    let mut tools = ToolHostProbe::default();
+    let mut model = ModelProbe::default();
+    let mut artifacts = MemoryArtifactStore::default();
+    let result = supervisor
+        .execute(
+            &dispatch(&plan),
+            &mut agent,
+            &mut environment,
+            Some(&mut scorer),
+            &mut backend,
+            &mut tools,
+            &mut model,
+            &mut artifacts,
+        )
+        .unwrap();
+    assert_eq!(result["execution_status"], "failed");
+    assert_eq!(result["score"]["status"], "error");
+    assert!(result["score"]["reward"].is_null());
+    assert!(result.get("outcome").is_some());
+    let manifest: Value =
+        serde_json::from_slice(&artifacts.read(&result["trajectory_ref"]).unwrap()).unwrap();
+    assert_eq!(manifest["trajectory_status"], "final_complete");
+    assert!(scorer.closed && backend.closed);
 }

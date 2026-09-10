@@ -41,6 +41,8 @@ def fixture_plan(episode, run, environment_manifest, registry, catalog):
         "version": environment_manifest["version"],
     }
     for role in ("environment", "scorer"):
+        if role == "scorer" and role not in run:
+            continue
         selected = run[role]["implementation"]
         if any(selected.get(field) != package_ref[field] for field in package_ref):
             raise ValueError(f"{role.upper()}_PACKAGE_MISMATCH")
@@ -49,18 +51,20 @@ def fixture_plan(episode, run, environment_manifest, registry, catalog):
             raise ValueError("COMPONENT_CONFIG_SCHEMA_MISMATCH")
     if episode["task"]["input"]["schema_ref"] != environment_manifest["task_schema"]:
         raise ValueError("COMPONENT_TASK_SCHEMA_MISMATCH")
-    if "private_data" in episode and (
+    if "scorer" in run and "private_data" in episode and (
             episode["private_data"]["schema_ref"]
             != environment_manifest.get("private_schema")):
         raise ValueError("SCORER_PRIVATE_SCHEMA_MISMATCH")
 
     plan = {"run_id": run["run_id"], **{key: deepcopy(episode[key]) for key in ("episode_id", "task", "seed")}}
-    if "private_data" in episode:
+    if "scorer" in run and "private_data" in episode:
         plan["private_data"] = deepcopy(episode["private_data"])
     for key in ("purpose", "model", "limits", "training"):
         if key in run:
             plan[key] = deepcopy(run[key])
     for role in ("environment", "agent", "scorer", "backend"):
+        if role == "scorer" and role not in run:
+            continue
         plan[role] = deepcopy(run[role])
         plan[role]["implementation"] = _resolved(run[role]["implementation"])
 

@@ -144,7 +144,7 @@ obj("ModelSpec", "统一模型端点；训练时可指向 Bridge ModelGateway", 
     "max_transport_retries": integer("仅尚未产生可用生成结果时的网络重试上限")})
 obj("Limits", "预算命名不可混用；完整 RunSpec 必须包含所有预算值", {
     "total_timeout_ms": integer("从 Server 接收起的总预算，包含排队及评分", 1),
-    "score_reserve_ms": integer("为结果收集、冻结及最终评分预留预算；三者共享总截止时间"),
+    "finalize_reserve_ms": integer("为结果收集、冻结及可选评分预留时间；无评分也保留，全部共享总截止时间"),
     "max_generations": integer("成功或部分完成的模型生成调用预算", 1),
     "max_tool_calls": integer("接受执行的工具调用预算"),
     "max_environment_steps": integer("环境转移次数预算；无状态任务可为 0"),
@@ -161,18 +161,19 @@ obj("RetryPolicy", "episode 失败重试仅 Server 决定", {
     "max_backoff_ms": integer("退避上限毫秒", 1)})
 obj("RunSpec", "用户随批次提交的完整运行配置；同一 run_id 的内容不可修改", {
     "schema_version": {"const": "vnext.3", "description": "契约版本"}, "run_id": ID,
-    "purpose": enum("作业用途", "evaluation", "training"), "environment": ref("ComponentSpec"),
+    "purpose": enum("结果用途；不决定评分算法", "evaluation", "training", "trajectory_collection"), "environment": ref("ComponentSpec"),
     "agent": ref("ComponentSpec", "智能体实现与参数；不提供 Agent 池或 placement；按 agent 角色校验接口和配置"), "tools": array(ref("ToolBinding"), "完整显式工具绑定；空数组要求实际无模型可见工具，不兼容的 Agent 必须拒绝"),
-    "scorer": ref("ComponentSpec", "本次运行唯一评分器；评测与后训练复用它产生的同一个 ScoreResult"), "backend": ref("BackendSpec"), "model": ref("ModelSpec"),
+    "scorer": ref("ComponentSpec", "唯一评分配置；评测和训练必填，轨迹采集可省略；省略即不评分，不接受 null"), "backend": ref("BackendSpec"), "model": ref("ModelSpec"),
     "limits": ref("Limits"), "retry": ref("RetryPolicy"),
     "trajectory_retention_days": integer("Server 保存权威轨迹的天数；只影响保留期，不改变记录内容", 1),
-    "training": ref("TrainingSpec", "仅 purpose=training 时必填；purpose=evaluation 时禁止出现"),
-    "runtime": ref("RuntimeSpec", "用户显式镜像选择，优先于 task 和 package")}, ("training", "runtime"))
+    "training": ref("TrainingSpec", "仅 purpose=training 时必填；评测和轨迹采集时禁止出现"),
+    "runtime": ref("RuntimeSpec", "用户显式镜像选择，优先于 task 和 package")}, ("training", "runtime", "scorer"))
 D["RunSpec"]["allOf"] = [{
     "if": {"properties": {"purpose": {"const": "training"}}},
     "then": {"required": ["training"]},
     "else": {"not": {"required": ["training"]}},
-}]
+}, {"if": {"properties": {"purpose": {"enum": ["evaluation", "training"]}}},
+    "then": {"required": ["scorer"]}}]
 # Submission defaults only. Validation and Worker execution never fill missing values.
 # Required wire fields stay required after the Bridge has expanded public input.
 for type_name, defaults in {
@@ -237,8 +238,10 @@ plan_fields.update({
         "required": ["image", "image_source"]},
     "plan_digest": SHA, "deadline_at_ms": {**TIME, "description": "首次接纳时间加 limits.total_timeout_ms，重试不续期；Worker 唯一总截止时间"}})
 obj("ExecutionPlan", "由请求与配置转换而来，不嵌套 EpisodeRequest/RunSpec；每项执行配置仅一处生效", plan_fields,
-    ("private_data", "training", "runtime"))
+    ("private_data", "training", "runtime", "scorer"))
 D["ExecutionPlan"]["allOf"] = copy.deepcopy(D["RunSpec"]["allOf"])
+D["ExecutionPlan"]["allOf"].append({"if": {"not": {"required": ["scorer"]}},
+    "then": {"not": {"required": ["private_data"]}}})
 obj("DispatchRequest", "Server -> Worker；派生预算字段只能收紧 ExecutionPlan 中的限制", {
     "plan": ref("ExecutionPlan"), "lease": ref("Lease"),
     "remaining_timeout_ms": integer("派发时距离 plan.deadline_at_ms 的剩余上限；Worker 转为本机单调时钟", 1),
@@ -285,12 +288,12 @@ obj("Usage", "本 episode 截至当前 attempt 的累计用量；不同操作独
 obj("EpisodeResult", "Worker 产生候选结果，Server 校验租约后形成唯一权威终态", {
     "run_id": ID, "episode_id": ID, "attempt_id": integer("有效 attempt", 1), "task_id": ID,
     "execution_status": enum("执行是否完成", "completed", "failed", "timeout", "cancelled"),
-    "score": ref("ScoreResult", "episode 结束后产生的唯一正式评分结果"), "outcome": ref("Outcome"),
+    "score": ref("ScoreResult", "仅实际评分时产生；无评分省略，Server 结合 ExecutionPlan 校验应有评分，不能伪造零分"), "outcome": ref("Outcome"),
     "trajectory_ref": ref("ArtifactRef"), "usage": ref("Usage"),
     "started_at_ms": TIME, "finished_at_ms": TIME, "error": ref("ErrorRecord"),
     "cleanup_status": enum("清理可独立重试，不改变任务评分", "completed", "pending", "failed")}, ("score", "outcome", "error", "started_at_ms", "trajectory_ref"))
 D["EpisodeResult"]["allOf"]=[{"if":{"properties":{"execution_status":{"const":"completed"}}},
-    "then":{"required":["started_at_ms","trajectory_ref","outcome","score"]}}]
+    "then":{"required":["started_at_ms","trajectory_ref","outcome"]}}]
 
 obj("GenerationEvent", "一次模型调用的原始记录；逐调用保留版本和 token 对齐", {
     "generation_id": ID, "model_id": string("实际模型"), "policy_version": string("实际策略版本"),
@@ -362,19 +365,19 @@ D["AgentManifest"]["properties"]["supported_interfaces"].update(minItems=1, uniq
 D["AgentManifest"]["properties"]["required_tool_names"].update(uniqueItems=True)
 obj("EntryPoints", "环境包 Python 入口，均为 module:Class", {
     "dataset_adapter": string("原始行 -> PreparedSample"), "environment": string("Environment 实现"),
-    "scorer": string("唯一单条 episode Scorer 实现；评测与后训练共用")})
+    "scorer": string("提供评分时声明的专属 Scorer 入口；仅采集的包可省略")}, ("scorer",))
 obj("PackageManifest", "统一环境包，不绑定 agent 或 backend", {
     "runtime": ref("RuntimeSpec", "数据集包默认镜像候选"), "id": ID,
     "version": string("精确版本"), "entrypoints": ref("EntryPoints"),
     "task_schema": string("任务业务字段 schema 标识"), "private_schema": string("私有评分字段 schema 标识"),
     "config_schemas": {
         "type": "object",
-        "description": "同一包内两个运行角色各自接受的配置 schema；角色名就是唯一索引",
+        "description": "已声明运行角色各自接受的配置 schema；scorer 与同名入口同时出现或省略",
         "properties": {
             "environment": string("Environment.config 接受的 schema 标识"),
             "scorer": string("Scorer.config 接受的 schema 标识"),
         },
-        "required": ["environment", "scorer"],
+        "required": ["environment"],
         "additionalProperties": False,
     },
     "internet_access": boolean("Environment 是否需要公共互联网；数据行、RunSpec、Agent 和 Tool 不得覆盖"),
@@ -382,6 +385,11 @@ obj("PackageManifest", "统一环境包，不绑定 agent 或 backend", {
     "artifacts": array(ref("ArtifactRef"), "代码 wheel 和显式声明的运行文件；镜像只由 runtime.image 引用"),
     "provided_tools": array(ref("ToolSpec"), "包可提供的工具声明；本次启用项只由 RunSpec.tools 决定"),
     "schemas": array(ref("ArtifactRef"), "包发布的带 $id 的 JSON Schema，注册前校验 digest")}, ("private_schema", "runtime"))
+D["PackageManifest"]["allOf"] = [{
+    "if": {"properties": {"entrypoints": {"required": ["scorer"]}}},
+    "then": {"properties": {"config_schemas": {"required": ["scorer"]}}},
+    "else": {"properties": {"config_schemas": {"not": {"required": ["scorer"]}}}},
+}]
 obj("WorkerRegistration", "Worker 声明能力，供 Server 匹配", {
     "worker_id": ID, "endpoint": string("Worker 地址"), "capacity": integer("可同时承载的 episode 槽位总数；不同于 CPU/内存/存储 resource_capacity", 1),
     "capabilities": array(string("能力名"), "运行能力"),

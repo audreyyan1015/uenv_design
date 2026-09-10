@@ -117,6 +117,7 @@ pub fn validate_batch_submission(
     schema.validate_shape("BatchRequest", batch)?;
     let run = &batch["run_spec"];
     schema.validate_shape("RunSpec", run)?;
+    validate_run_purpose(run)?;
     let run_id = string(run, "run_id")?;
     if let Some(stored) = stored_run {
         if string(stored, "run_id")? != run_id {
@@ -168,6 +169,7 @@ impl PlanResolver<'_> {
     ) -> Result<Value> {
         self.schema.validate_shape("EpisodeRequest", episode)?;
         self.schema.validate_shape("RunSpec", run)?;
+        validate_run_purpose(run)?;
 
         let task = episode
             .get("task")
@@ -178,6 +180,7 @@ impl PlanResolver<'_> {
             .ok_or_else(|| ControlError::new("INVALID_TASK_SCHEMA"))?;
         let private_schema = episode
             .get("private_data")
+            .filter(|_| run.get("scorer").is_some())
             .map(|private_data| {
                 private_data
                     .get("schema_ref")
@@ -199,7 +202,10 @@ impl PlanResolver<'_> {
                 })?,
             );
         }
-        if let Some(value) = episode.get("private_data") {
+        if let Some(value) = episode
+            .get("private_data")
+            .filter(|_| run.get("scorer").is_some())
+        {
             plan.insert("private_data".to_owned(), value.clone());
         }
         for field in ["purpose", "model", "limits", "training"] {
@@ -225,6 +231,9 @@ impl PlanResolver<'_> {
         }
 
         for role in ["environment", "agent", "scorer", "backend"] {
+            if role == "scorer" && run.get(role).is_none() {
+                continue;
+            }
             let spec = run
                 .get(role)
                 .ok_or_else(|| ControlError::new(format!("MISSING_FIELD:RunSpec.{role}")))?;
@@ -250,20 +259,19 @@ impl PlanResolver<'_> {
             .and_then(|v| v.get("implementation"))
             .ok_or_else(|| ControlError::new("MISSING_RESOLVED_ENVIRONMENT"))?;
         let environment_metadata = self.catalog.get(environment)?;
-        let scorer = plan
-            .get("scorer")
-            .and_then(|v| v.get("implementation"))
-            .ok_or_else(|| ControlError::new("MISSING_RESOLVED_SCORER"))?;
-        let scorer_metadata = self.catalog.get(scorer)?;
-        for metadata in [environment_metadata, scorer_metadata] {
-            if !metadata.task_schemas.contains(task_schema) {
+        if !environment_metadata.task_schemas.contains(task_schema) {
+            return Err(ControlError::new("COMPONENT_TASK_SCHEMA_MISMATCH"));
+        }
+        if let Some(scorer) = plan.get("scorer") {
+            let scorer_metadata = self.catalog.get(&scorer["implementation"])?;
+            if !scorer_metadata.task_schemas.contains(task_schema) {
                 return Err(ControlError::new("COMPONENT_TASK_SCHEMA_MISMATCH"));
             }
-        }
-        if let Some(private_schema) = private_schema
-            && !scorer_metadata.private_schemas.contains(private_schema)
-        {
-            return Err(ControlError::new("SCORER_PRIVATE_SCHEMA_MISMATCH"));
+            if let Some(private_schema) = private_schema
+                && !scorer_metadata.private_schemas.contains(private_schema)
+            {
+                return Err(ControlError::new("SCORER_PRIVATE_SCHEMA_MISMATCH"));
+            }
         }
         let internet_access = environment_metadata.requires_internet_access;
         if internet_access {
@@ -545,17 +553,73 @@ pub fn validate_execution_plan(plan: &Value, schema: &ContractSchema) -> Result<
     let limits = plan
         .get("limits")
         .ok_or_else(|| ControlError::new("MISSING_LIMITS"))?;
-    if u64_field(limits, "score_reserve_ms")? > u64_field(limits, "total_timeout_ms")? {
-        return Err(ControlError::new("INVALID_SCORE_RESERVE"));
+    if u64_field(limits, "finalize_reserve_ms")? > u64_field(limits, "total_timeout_ms")? {
+        return Err(ControlError::new("INVALID_FINALIZE_RESERVE"));
     }
-    match (string(plan, "purpose")?, plan.get("training")) {
-        ("training", None) => {
-            return Err(ControlError::new("MISSING_TRAINING_CONFIGURATION"));
-        }
-        ("evaluation", Some(_)) => {
+    validate_run_purpose(plan)?;
+    if plan.get("scorer").is_none() && plan.get("private_data").is_some() {
+        return Err(ControlError::new("PRIVATE_DATA_WITHOUT_SCORER"));
+    }
+    Ok(())
+}
+
+/// Shared semantic check for the submission and resolved plan boundaries.
+pub fn validate_run_purpose(config: &Value) -> Result<()> {
+    let purpose = string(config, "purpose")?;
+    if !["evaluation", "training", "trajectory_collection"].contains(&purpose) {
+        return Err(ControlError::new("INVALID_PURPOSE"));
+    }
+    match (purpose, config.get("training")) {
+        ("training", None) => return Err(ControlError::new("MISSING_TRAINING_CONFIGURATION")),
+        ("evaluation" | "trajectory_collection", Some(_)) => {
             return Err(ControlError::new("UNEXPECTED_TRAINING_CONFIGURATION"));
         }
         _ => {}
+    }
+    if let Some(scorer) = config.get("scorer") {
+        object(scorer, "scorer")?;
+    } else if purpose != "trajectory_collection" {
+        return Err(ControlError::new("MISSING_SCORER"));
+    }
+    Ok(())
+}
+
+/// Server must apply this together with full schema and lease validation.
+/// The plan is the source of scoring intent; absent results never disable scoring.
+pub fn validate_result_for_plan(
+    result: &Value,
+    plan: &Value,
+    schema: &ContractSchema,
+) -> Result<()> {
+    schema.validate_shape("EpisodeResult", result)?;
+    for field in ["run_id", "episode_id", "attempt_id"] {
+        if result.get(field) != plan.get(field) {
+            return Err(ControlError::new("RESULT_IDENTITY_MISMATCH"));
+        }
+    }
+    if result.get("task_id") != plan.pointer("/task/task_id") {
+        return Err(ControlError::new("RESULT_IDENTITY_MISMATCH"));
+    }
+    if plan.get("scorer").is_none() && result.get("score").is_some() {
+        return Err(ControlError::new("UNEXPECTED_SCORE"));
+    }
+    if let Some(score) = result.get("score") {
+        schema.validate_shape("ScoreResult", score)?;
+        if score.get("scorer") != plan.pointer("/scorer/implementation") {
+            return Err(ControlError::new("RESULT_SCORER_MISMATCH"));
+        }
+    }
+    if string(result, "execution_status")? == "completed" {
+        for field in ["outcome", "trajectory_ref", "started_at_ms"] {
+            if result.get(field).is_none_or(Value::is_null) {
+                return Err(ControlError::new("INCOMPLETE_RESULT"));
+            }
+        }
+        if plan.get("scorer").is_some()
+            && result.pointer("/score/status").and_then(Value::as_str) != Some("ok")
+        {
+            return Err(ControlError::new("MISSING_SUCCESSFUL_SCORE"));
+        }
     }
     Ok(())
 }

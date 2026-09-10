@@ -72,10 +72,16 @@ def main() -> None:
         manifests[name] = build_manifest(package, generated_root / "packages" / name)
 
     registry = SchemaRegistry.bundled()
-    for package in packages:
-        name = package["directory"].name
+    for run_path in sorted((ROOT / "reference/runs").glob("*.yaml")):
+        public_run = load_yaml(run_path)
+        selected = public_run["environment"]["implementation"]
+        package = next((p for p in packages if all(
+            p["declaration"][key] == selected[key] for key in ("id", "version"))), None)
+        if package is None:
+            raise ValueError(f"No registered environment package for {run_path}")
+        name = run_path.stem
         declaration = package["declaration"]
-        manifest = manifests[name]
+        manifest = manifests[package["directory"].name]
         registry.validate("PackageManifest", manifest)
 
         raw = load_case(package["directory"])
@@ -107,8 +113,9 @@ def main() -> None:
         if private_data is not None:
             episode["private_data"] = private_data
 
-        public_run = load_yaml(ROOT / "reference/runs" / f"{name}.yaml")
         run = expand_run(public_run, manifest, catalog)
+        if "scorer" not in run:
+            episode.pop("private_data", None)
         batch = {"batch_id": episode["batch_id"], "run_spec": run, "episodes": [episode]}
         registry.validate("BatchRequest", batch)
         registry.validate("RunSpec", run)
@@ -123,7 +130,7 @@ def main() -> None:
         write_json(output / "run_spec.json", run)
         write_json(output / "execution_plan.json", plan)
 
-    print(f"Generated {len(packages)} packages from dataset.yaml and models.py; public runs contain no schema_ref.")
+    print(f"Generated {len(packages)} packages from dataset.yaml and models.py; all public runs expanded without author-supplied schema_ref.")
 
 
 if __name__ == "__main__":
