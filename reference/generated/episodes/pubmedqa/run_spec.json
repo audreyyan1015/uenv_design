@@ -1,11 +1,12 @@
 {
   "run_id": "demo-pubmedqa",
   "purpose": "evaluation",
-  "environment": {
-    "implementation": {
-      "id": "datasets/pubmedqa",
-      "version": "1.0.0"
-    },
+  "dataset_package": {
+    "id": "datasets/pubmedqa",
+    "version": "1.0.0"
+  },
+  "scoring": {
+    "enabled": true,
     "config": {
       "schema_ref": "uenv://schemas/vnext/EmptyConfig",
       "data": {}
@@ -25,16 +26,6 @@
     }
   },
   "tools": [],
-  "scorer": {
-    "implementation": {
-      "id": "datasets/pubmedqa",
-      "version": "1.0.0"
-    },
-    "config": {
-      "schema_ref": "uenv://schemas/vnext/EmptyConfig",
-      "data": {}
-    }
-  },
   "backend": {
     "implementation": {
       "id": "backends/process",
@@ -71,7 +62,6 @@
     "finalize_reserve_ms": 120000,
     "max_generations": 1,
     "max_tool_calls": 0,
-    "max_environment_steps": 0,
     "max_total_output_tokens": 32768
   },
   "retry": {
@@ -80,5 +70,9 @@
     "max_backoff_ms": 5000
   },
   "trajectory_retention_days": 7,
-  "schema_version": "vnext.3"
+  "schema_version": "vnext.3",
+  "environment": {
+    "schema_ref": "uenv://schemas/vnext/EmptyConfig",
+    "data": {}
+  }
 }

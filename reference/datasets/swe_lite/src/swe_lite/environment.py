@@ -1,4 +1,4 @@
-from uenv.sdk import Environment, Observation, text_part
+from uenv.sdk import Environment, Observation, structured_part
 
 
 class SweLiteEnvironment(Environment):
@@ -7,4 +7,4 @@ class SweLiteEnvironment(Environment):
     def reset(self, task, context) -> Observation:
         context.check()
         input_data = task.input
-        return Observation([text_part(input_data.instruction)], input_data)
+        return Observation(content=[structured_part(input_data)])

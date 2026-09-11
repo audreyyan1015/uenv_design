@@ -59,19 +59,23 @@
     "finalize_reserve_ms": 120000,
     "max_generations": 1,
     "max_tool_calls": 0,
-    "max_environment_steps": 0,
     "max_total_output_tokens": 32768
   },
   "environment": {
-    "implementation": {
-      "id": "datasets/scitab",
-      "version": "1.0.0",
-      "digest": "sha256:bc0b3a298aa3d2624be1094696d9606450541547ec0a1858e4a1a965d3db5757"
-    },
+    "schema_ref": "uenv://schemas/vnext/EmptyConfig",
+    "data": {}
+  },
+  "scoring": {
+    "enabled": true,
     "config": {
       "schema_ref": "uenv://schemas/vnext/EmptyConfig",
       "data": {}
     }
+  },
+  "dataset_package": {
+    "id": "datasets/scitab",
+    "version": "1.0.0",
+    "digest": "sha256:bc0b3a298aa3d2624be1094696d9606450541547ec0a1858e4a1a965d3db5757"
   },
   "agent": {
     "implementation": {
@@ -85,17 +89,6 @@
         "history_policy": "full",
         "system_prompt": ""
       }
-    }
-  },
-  "scorer": {
-    "implementation": {
-      "id": "datasets/scitab",
-      "version": "1.0.0",
-      "digest": "sha256:bc0b3a298aa3d2624be1094696d9606450541547ec0a1858e4a1a965d3db5757"
-    },
-    "config": {
-      "schema_ref": "uenv://schemas/vnext/EmptyConfig",
-      "data": {}
     }
   },
   "backend": {
@@ -122,5 +115,5 @@
   "required_capabilities": [],
   "internet_access": false,
   "deadline_at_ms": 1800000300000,
-  "plan_digest": "sha256:e1df5c1ead29db8cf2bc67b993b5b530004366dc9e758e486442fd6ddf8a3085"
+  "plan_digest": "sha256:82dd426e3ba6c8be7bb93af7b3f26bc7a3f2615322e5d85bdcd9951c5d69f146"
 }

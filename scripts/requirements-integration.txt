@@ -1,0 +1,5 @@
+# Optional real Agent/MCP integration tests; install in an isolated Python 3.12+ venv.
+openhands-sdk==1.15.0
+mcp==1.26.0
+jsonschema==4.23.0
+PyYAML==6.0.2

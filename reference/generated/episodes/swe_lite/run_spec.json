@@ -1,11 +1,12 @@
 {
   "run_id": "demo-swe_lite",
   "purpose": "evaluation",
-  "environment": {
-    "implementation": {
-      "id": "datasets/swe-lite",
-      "version": "1.0.0"
-    },
+  "dataset_package": {
+    "id": "datasets/swe-lite",
+    "version": "1.0.0"
+  },
+  "scoring": {
+    "enabled": true,
     "config": {
       "schema_ref": "uenv://schemas/vnext/EmptyConfig",
       "data": {}
@@ -27,7 +28,7 @@
     {
       "name": "terminal",
       "implementation": {
-        "id": "tools/terminal",
+        "id": "agents/openhands/tools/terminal",
         "version": "1.0.0"
       },
       "config": {
@@ -41,7 +42,7 @@
     {
       "name": "file_editor",
       "implementation": {
-        "id": "tools/file-editor",
+        "id": "agents/openhands/tools/file-editor",
         "version": "1.0.0"
       },
       "config": {
@@ -55,7 +56,7 @@
     {
       "name": "task_tracker",
       "implementation": {
-        "id": "tools/openhands-task-tracker",
+        "id": "agents/openhands/tools/task-tracker",
         "version": "1.0.0"
       },
       "config": {
@@ -66,7 +67,7 @@
     {
       "name": "finish",
       "implementation": {
-        "id": "tools/openhands-finish",
+        "id": "agents/openhands/tools/finish",
         "version": "1.0.0"
       },
       "config": {
@@ -75,16 +76,6 @@
       }
     }
   ],
-  "scorer": {
-    "implementation": {
-      "id": "datasets/swe-lite",
-      "version": "1.0.0"
-    },
-    "config": {
-      "schema_ref": "uenv://schemas/vnext/EmptyConfig",
-      "data": {}
-    }
-  },
   "backend": {
     "implementation": {
       "id": "backends/docker",
@@ -119,7 +110,6 @@
     "finalize_reserve_ms": 120000,
     "max_generations": 30,
     "max_tool_calls": 60,
-    "max_environment_steps": 0,
     "max_total_output_tokens": 32768
   },
   "runtime": {
@@ -131,5 +121,9 @@
     "max_backoff_ms": 5000
   },
   "trajectory_retention_days": 7,
-  "schema_version": "vnext.3"
+  "schema_version": "vnext.3",
+  "environment": {
+    "schema_ref": "uenv://schemas/vnext/EmptyConfig",
+    "data": {}
+  }
 }

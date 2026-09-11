@@ -68,19 +68,23 @@
     "finalize_reserve_ms": 120000,
     "max_generations": 1,
     "max_tool_calls": 60,
-    "max_environment_steps": 0,
     "max_total_output_tokens": 32768
   },
   "environment": {
-    "implementation": {
-      "id": "datasets/dscodebench",
-      "version": "1.0.0",
-      "digest": "sha256:87933f99c78b31003cba0159734a169b5a39b613519ae6630c33c047971fbbb5"
-    },
+    "schema_ref": "uenv://schemas/vnext/EmptyConfig",
+    "data": {}
+  },
+  "scoring": {
+    "enabled": true,
     "config": {
       "schema_ref": "uenv://schemas/vnext/EmptyConfig",
       "data": {}
     }
+  },
+  "dataset_package": {
+    "id": "datasets/dscodebench",
+    "version": "1.0.0",
+    "digest": "sha256:87933f99c78b31003cba0159734a169b5a39b613519ae6630c33c047971fbbb5"
   },
   "agent": {
     "implementation": {
@@ -94,17 +98,6 @@
         "history_policy": "full",
         "system_prompt": ""
       }
-    }
-  },
-  "scorer": {
-    "implementation": {
-      "id": "datasets/dscodebench",
-      "version": "1.0.0",
-      "digest": "sha256:87933f99c78b31003cba0159734a169b5a39b613519ae6630c33c047971fbbb5"
-    },
-    "config": {
-      "schema_ref": "uenv://schemas/vnext/EmptyConfig",
-      "data": {}
     }
   },
   "backend": {
@@ -136,5 +129,5 @@
   ],
   "internet_access": false,
   "deadline_at_ms": 1800000300000,
-  "plan_digest": "sha256:627075773812649d487e9549893c45d8ef8a05ae55aea462926c2f263e7f582d"
+  "plan_digest": "sha256:0d03ee1a59ec9f20d5193fb086b964924215c271ae65198ab6e57b07c9ea8d0c"
 }

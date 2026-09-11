@@ -5,7 +5,7 @@ use serde_json::{Map, Value, json};
 use crate::contracts::{ContractSchema, array, u64_field};
 use crate::plan::{validate_execution_plan, validate_result_for_plan, verify_actual_tools};
 use crate::ports::{
-    AgentHost, ArtifactStore, Backend, Cancellation, Clock, EnvironmentHost, ModelProvider,
+    AgentHost, Backend, Cancellation, Clock, EnvironmentHost, FileStore, ModelProvider,
     NEVER_CANCELLED, ScorerHost, ToolHost,
 };
 use crate::runtime::{AgentRuntime, BudgetEnforcer, TrajectoryWriter, ensure_plan_backend_started};
@@ -20,7 +20,8 @@ pub struct EpisodeSupervisor<'a> {
 }
 
 struct CompletedAttempt {
-    outcome: Value,
+    final_answer: Value,
+    termination_reason: String,
     score: Option<Value>,
 }
 
@@ -65,14 +66,14 @@ impl<'a> EpisodeSupervisor<'a> {
         backend: &mut dyn Backend,
         tool_host: &mut dyn ToolHost,
         model_provider: &mut dyn ModelProvider,
-        artifacts: &mut dyn ArtifactStore,
+        artifacts: &mut dyn FileStore,
     ) -> Result<Value> {
         self.schema.validate_shape("DispatchRequest", dispatch)?;
         let plan = dispatch
             .get("plan")
             .ok_or_else(|| ControlError::new("MISSING_EXECUTION_PLAN"))?;
         validate_execution_plan(plan, self.schema)?;
-        if plan.get("scorer").is_some() != scorer_host.is_some() {
+        if (plan["scoring"]["enabled"] == true) != scorer_host.is_some() {
             return Err(ControlError::new("SCORER_HOST_MISMATCH"));
         }
         self.check_cancelled()?;
@@ -92,7 +93,10 @@ impl<'a> EpisodeSupervisor<'a> {
         let started_at_ms = self.clock.unix_time_ms();
         let mut budget = BudgetEnforcer::from_dispatch(dispatch, self.clock)?;
         budget.check_total(self.clock)?;
-        let mut trajectory = TrajectoryWriter::from_plan(plan, self.schema)?;
+        let mut trajectory = match artifacts.spool_root() {
+            Some(root) => TrajectoryWriter::with_spool(plan, self.schema, &root)?,
+            None => TrajectoryWriter::from_plan(plan, self.schema)?,
+        };
         let attempt = (|| {
             // Backend creation is inside the same cleanup domain as every later phase.
             // close() is idempotent and is attempted even when open() fails part-way.
@@ -113,6 +117,7 @@ impl<'a> EpisodeSupervisor<'a> {
                 .map_err(|error| error.in_phase("prepare"))?;
             environment_host
                 .prepare(
+                    &plan["dataset_package"],
                     &plan["environment"],
                     &session,
                     environment_prepare_timeout_ms,
@@ -133,7 +138,12 @@ impl<'a> EpisodeSupervisor<'a> {
                 .remaining_interaction_ms(self.clock)
                 .map_err(|error| error.in_phase("prepare"))?;
             let visible_tools = agent_host
-                .prepare(&plan["agent"], planned_tools, agent_prepare_timeout_ms)
+                .prepare(
+                    &plan["agent"],
+                    planned_tools,
+                    crate::contracts::string(&plan["model"], "model_id")?,
+                    agent_prepare_timeout_ms,
+                )
                 .map_err(|error| error.in_phase("prepare"))?;
             verify_actual_tools(planned_tools, &visible_tools)
                 .map_err(|error| error.in_phase("prepare"))?;
@@ -251,7 +261,11 @@ impl<'a> EpisodeSupervisor<'a> {
             ),
         ]);
         if let Some(completed) = completed {
-            result.insert("outcome".to_owned(), completed.outcome);
+            result.insert("final_answer".to_owned(), completed.final_answer);
+            result.insert(
+                "termination_reason".to_owned(),
+                json!(completed.termination_reason),
+            );
             if let Some(score) = completed.score {
                 result.insert("score".to_owned(), score);
             }
@@ -274,16 +288,30 @@ impl<'a> EpisodeSupervisor<'a> {
         backend: &mut dyn Backend,
         tool_host: &mut dyn ToolHost,
         model_provider: &mut dyn ModelProvider,
-        artifacts: &mut dyn ArtifactStore,
+        artifacts: &mut dyn FileStore,
         budget: &mut BudgetEnforcer,
         trajectory: &mut TrajectoryWriter,
     ) -> Result<CompletedAttempt> {
         let reset_timeout_ms = budget
             .remaining_interaction_ms(self.clock)
             .map_err(|error| error.in_phase("environment"))?;
-        let observation = environment_host
-            .reset(&plan["task"], u64_field(plan, "seed")?, reset_timeout_ms)
-            .map_err(|error| error.in_phase("environment"))?;
+        let previous_complete = trajectory.begin_operation();
+        let observation =
+            match environment_host.reset(&plan["task"], u64_field(plan, "seed")?, reset_timeout_ms)
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    // A definite component error is a recorded execution failure.
+                    // Losing the process/transport leaves reset effects unknown.
+                    if !error.code.starts_with("RPC_")
+                        && !error.code.ends_with("TIMEOUT")
+                        && error.code != "EPISODE_CANCELLED"
+                    {
+                        trajectory.finish_operation(previous_complete);
+                    }
+                    return Err(error.in_phase("environment"));
+                }
+            };
         self.schema
             .validate_shape("Observation", &observation)
             .map_err(|error| error.in_phase("environment"))?;
@@ -295,6 +323,7 @@ impl<'a> EpisodeSupervisor<'a> {
                 self.clock.unix_time_ms(),
             )
             .map_err(|error| error.in_phase("persist"))?;
+        trajectory.finish_operation(previous_complete);
         trajectory
             .record(
                 "state",
@@ -306,32 +335,36 @@ impl<'a> EpisodeSupervisor<'a> {
         let agent_timeout_ms = budget
             .remaining_interaction_ms(self.clock)
             .map_err(|error| error.in_phase("agent"))?;
-        let submitted = {
+        let (final_answer, termination_reason) = {
             let mut runtime = AgentRuntime::new(
                 plan,
                 self.schema,
                 self.clock,
                 self.cancellation,
                 tool_host,
-                environment_host,
                 model_provider,
                 budget,
                 trajectory,
                 &observation,
             )?;
-            agent_host
+            let submitted = agent_host
                 .run_agent(&plan["task"], &observation, &mut runtime, agent_timeout_ms)
-                .map_err(|error| error.in_phase("agent"))?
+                .map_err(|error| error.in_phase("agent"))?;
+            (submitted, runtime.termination_reason().to_owned())
         };
         self.check_cancelled()?;
-        self.schema
-            .validate_shape("Outcome", &submitted)
-            .map_err(|error| error.in_phase("agent"))?;
-        if submitted.get("state").is_some() {
-            return Err(ControlError::new("AGENT_OUTCOME_STATE_FORBIDDEN").in_phase("agent"));
-        }
-        if submitted.get("termination_reason").and_then(Value::as_str) == Some("in_progress") {
-            return Err(ControlError::new("UNFINISHED_AGENT_OUTCOME").in_phase("agent"));
+        let parts = final_answer
+            .as_array()
+            .ok_or_else(|| ControlError::new("INVALID_FINAL_ANSWER").in_phase("agent"))?;
+        for part in parts {
+            self.schema
+                .validate_shape("ContentPart", part)
+                .map_err(|error| error.in_phase("agent"))?;
+            if let Some(reference) = part.get("artifact") {
+                artifacts
+                    .read(reference)
+                    .map_err(|error| error.in_phase("agent"))?;
+            }
         }
         trajectory
             .record(
@@ -340,29 +373,6 @@ impl<'a> EpisodeSupervisor<'a> {
                 self.clock.unix_time_ms(),
             )
             .map_err(|error| error.in_phase("persist"))?;
-        let finalize_timeout_ms = budget
-            .remaining_finalize_ms(self.clock)
-            .map_err(|error| error.in_phase("environment"))?;
-        let outcome = environment_host
-            .finalize(&submitted, finalize_timeout_ms)
-            .map_err(|error| error.in_phase("environment"))?;
-        self.check_cancelled()?;
-        self.schema
-            .validate_shape("Outcome", &outcome)
-            .map_err(|error| error.in_phase("environment"))?;
-        if outcome.get("termination_reason").and_then(Value::as_str) == Some("in_progress") {
-            return Err(ControlError::new("UNFINISHED_OUTCOME").in_phase("environment"));
-        }
-        for artifact in outcome
-            .get("artifacts")
-            .and_then(Value::as_array)
-            .ok_or_else(|| ControlError::new("INVALID_OUTCOME_ARTIFACTS"))?
-        {
-            artifacts
-                .read(artifact)
-                .map_err(|error| error.in_phase("environment"))?;
-        }
-
         let tool_freeze_timeout_ms = budget
             .remaining_finalize_ms(self.clock)
             .map_err(|error| error.in_phase("tool"))?;
@@ -379,10 +389,21 @@ impl<'a> EpisodeSupervisor<'a> {
         budget.remaining_finalize_ms(self.clock)?;
         let Some(scorer_host) = scorer_host.as_deref_mut() else {
             return Ok(CompletedAttempt {
-                outcome,
+                final_answer,
+                termination_reason,
                 score: None,
             });
         };
+        let snapshot_timeout_ms = budget.remaining_finalize_ms(self.clock)?;
+        let state = environment_host
+            .state_snapshot(snapshot_timeout_ms)
+            .map_err(|error| error.in_phase("environment"))?;
+        if let Some(state) = &state {
+            self.schema
+                .validate_shape("TypedConfig", state)
+                .map_err(|error| error.in_phase("environment"))?;
+        }
+        self.check_cancelled()?;
         trajectory
             .record(
                 "state",
@@ -399,9 +420,15 @@ impl<'a> EpisodeSupervisor<'a> {
         budget.remaining_finalize_ms(self.clock)?;
         let mut score_input = json!({
             "task": plan["task"],
-            "outcome": outcome,
+            "final_answer": final_answer,
             "trajectory_ref": trajectory_ref,
         });
+        if let Some(state) = state {
+            score_input
+                .as_object_mut()
+                .unwrap()
+                .insert("state".to_owned(), state);
+        }
         if let Some(private_data) = plan.get("private_data") {
             score_input
                 .as_object_mut()
@@ -415,11 +442,13 @@ impl<'a> EpisodeSupervisor<'a> {
             self.clock,
             self.cancellation,
             score_deadline,
+            &score_input,
         );
         let score = run_score(
             self.schema,
             scorer_host,
-            &plan["scorer"],
+            &plan["dataset_package"],
+            &plan["scoring"]["config"],
             &score_input,
             &mut scoring_context,
         );
@@ -427,7 +456,8 @@ impl<'a> EpisodeSupervisor<'a> {
         // record() marks the final manifest partial in that case.
         let _ = trajectory.record("score", score.clone(), self.clock.unix_time_ms());
         Ok(CompletedAttempt {
-            outcome,
+            final_answer,
+            termination_reason,
             score: Some(score),
         })
     }

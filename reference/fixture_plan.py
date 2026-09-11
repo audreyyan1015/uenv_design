@@ -7,6 +7,7 @@ from copy import deepcopy
 import hashlib
 
 from uenv.sdk.schema_registry import canonical_bytes
+from package_loader import select_manifest, lookup_tool
 
 
 def digest(value):
@@ -26,45 +27,36 @@ def seal_fixture_plan(plan):
     return result
 
 
-def fixture_plan(episode, run, environment_manifest, registry, catalog):
+def fixture_plan(episode, run, manifests, registry, catalog):
     """Build a deterministic sample from registered component definitions.
 
-    This development helper receives a manifest only to simulate Hub catalog
+    This development helper receives manifests only to simulate Hub catalog
     registration. The production PlanResolver receives no manifest side input:
     RunSpec selects components and the catalog supplies their installed definitions.
     """
     registry.validate("EpisodeRequest", episode)
     registry.validate("RunSpec", run)
+    environment_manifest = select_manifest(manifests, run["dataset_package"], "environment")
     registry.validate("PackageManifest", environment_manifest)
-    package_ref = {
-        "id": environment_manifest["id"],
-        "version": environment_manifest["version"],
-    }
-    for role in ("environment", "scorer"):
-        if role == "scorer" and role not in run:
-            continue
-        selected = run[role]["implementation"]
-        if any(selected.get(field) != package_ref[field] for field in package_ref):
-            raise ValueError(f"{role.upper()}_PACKAGE_MISMATCH")
-        if (run[role]["config"]["schema_ref"]
-                != environment_manifest["config_schemas"][role]):
-            raise ValueError("COMPONENT_CONFIG_SCHEMA_MISMATCH")
+    if run["environment"]["schema_ref"] != environment_manifest["config_schemas"]["environment"]:
+        raise ValueError("COMPONENT_CONFIG_SCHEMA_MISMATCH")
     if episode["task"]["input"]["schema_ref"] != environment_manifest["task_schema"]:
         raise ValueError("COMPONENT_TASK_SCHEMA_MISMATCH")
-    if "scorer" in run and "private_data" in episode and (
-            episode["private_data"]["schema_ref"]
-            != environment_manifest.get("private_schema")):
-        raise ValueError("SCORER_PRIVATE_SCHEMA_MISMATCH")
+    if run["scoring"]["enabled"]:
+        select_manifest(manifests, run["dataset_package"], "scorer")
+        if run["scoring"]["config"]["schema_ref"] != environment_manifest["config_schemas"]["scorer"]:
+            raise ValueError("COMPONENT_CONFIG_SCHEMA_MISMATCH")
+        if "private_data" in episode and episode["private_data"]["schema_ref"] != environment_manifest.get("private_schema"):
+            raise ValueError("SCORER_PRIVATE_SCHEMA_MISMATCH")
 
     plan = {"run_id": run["run_id"], **{key: deepcopy(episode[key]) for key in ("episode_id", "task", "seed")}}
-    if "scorer" in run and "private_data" in episode:
+    if run["scoring"]["enabled"] and "private_data" in episode:
         plan["private_data"] = deepcopy(episode["private_data"])
-    for key in ("purpose", "model", "limits", "training"):
+    for key in ("purpose", "model", "limits", "training", "environment", "scoring"):
         if key in run:
             plan[key] = deepcopy(run[key])
-    for role in ("environment", "agent", "scorer", "backend"):
-        if role == "scorer" and role not in run:
-            continue
+    plan["dataset_package"] = _resolved(run["dataset_package"])
+    for role in ("agent", "backend"):
         plan[role] = deepcopy(run[role])
         plan[role]["implementation"] = _resolved(run[role]["implementation"])
 
@@ -73,21 +65,21 @@ def fixture_plan(episode, run, environment_manifest, registry, catalog):
         required.add("internet_access.v1")
     plan["tools"] = []
     for binding in run["tools"]:
-        component = catalog["components"][binding["implementation"]["id"]]
-        if component["role"] != "tool":
-            raise ValueError("TOOL_ROLE_MISMATCH")
+        component = lookup_tool(catalog, binding["implementation"], run["agent"]["implementation"], manifests)
         scope = component["execution_scope"]
         capabilities = component["required_capabilities"]
         required.update(capabilities)
         plan["tools"].append({
             "name": binding["name"],
             "implementation": _resolved(binding["implementation"]),
-            "adapter": _resolved(component["adapter"]),
             "config": deepcopy(binding["config"]),
-            "interface": component["interface"],
             "execution_scope": scope,
             "required_capabilities": capabilities,
         })
+        if "native_agent" in component:
+            owner = plan["agent"]["implementation"]
+            plan["tools"][-1]["native_agent"] = deepcopy(owner)
+            plan["tools"][-1]["implementation"]["digest"] = owner["digest"]
 
     backend = catalog["components"][run["backend"]["implementation"]["id"]]
     if backend["role"] != "backend":

@@ -4,12 +4,26 @@
 //! user extensions; this crate owns plan resolution, budgets, routing, scoring
 //! completion, cleanup, trajectory sealing, and the attempt result.
 
+#[cfg(target_os = "linux")]
+pub mod backends;
 pub mod contracts;
+pub mod lease;
 pub mod plan;
 pub mod ports;
+#[cfg(target_os = "linux")]
+pub mod process;
+pub mod repository;
+pub mod rpc;
 pub mod runtime;
 pub mod scoring;
+pub mod storage;
 pub mod supervisor;
+pub mod worker;
+
+/// Generated transport messages; edit contracts/proto, never this output.
+pub mod protocol {
+    include!(concat!(env!("OUT_DIR"), "/uenv.v1.rs"));
+}
 
 use thiserror::Error;
 

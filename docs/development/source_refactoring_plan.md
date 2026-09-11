@@ -1,5 +1,7 @@
 # UEnv 源码重构计划
 
+2026-09-11 参考实现进展：design 已加入按模型生成关联的过程评分校验，以及 Linux Process/Docker/Podman 的统一命令会话实现；完整 ComponentHost 通信、常驻环境和官方 harness 尚未接通。此进展没有修改 source 或生产服务，具体实现边界见[参考实现第 11 节](reference_implementation.md#11-linux-后端命令执行与隔离)。
+
 ## 1. 目的与范围
 
 本文把目标设计转换为可以逐步实施的源码改造计划。目标不是按照新目录重新编写整个系统，而是保留现有可靠能力，替换职责混乱的协议和编排，完成验证后删除旧分支。
@@ -97,7 +99,7 @@ Bridge、Server 和 Worker 主流程不得出现 `if dataset == ...`、`if env_t
 ```text
 Bridge -> Server -> ExecutionPlan -> Worker EpisodeSupervisor
        -> BackendSession -> Environment -> AgentRunner
-       -> Environment.finalize -> Scorer -> Trajectory/EpisodeResult
+       -> 校验 final_answer / 停止写入 / 冻结后端 -> 可选 Scorer -> Trajectory/EpisodeResult
 ```
 
 ### 2.5 旧代码先失去流量，再删除
@@ -236,9 +238,13 @@ Worker 当前也不只是资源启动器。EpisodeExecutor（生产源码 `uenv-
 
 迁移验收必须确认三个转换点：Bridge 只提交标准请求；Server 一次解析并锁定计划；Worker 只从派发请求执行该计划。数据集迁移只替换扩展实现，不增加提交、调度、Agent 或评分分支。旧链与新链的并存边界见第 2.2 节。
 
-轨迹采集作为本次目标协议的一部分实施：RunSpec.purpose 增加 trajectory_collection；scorer 在评测/训练必填，在采集时可省略；training 仍只用于在线训练接入。继续使用同一 BatchRequest、Worker 和轨迹协议，不引入采集专用服务。limits.finalize_reserve_ms 统一表达收集、冻结及可选评分的预留时间，协议迁移时同步替换旧评分预留字段，不保留双入口。
+观测只保留 content、terminated、episode_truncated；文本、文件引用和有类型的结构化内容均使用 ContentPart，不保留平行的 Observation.data。数据集 models.py 声明结构化内容类型，SDK structured_part 生成内容项；Worker 公共模型入口统一将结构化项转换为 JSON 文本，原始观测轨迹保留结构，GenerationEvent.messages 记录实际模型输入。迁移时验收未知类型、错误字段类型及混用多种内容载荷均被拒绝。
 
-迁移需要联动检查：Bridge 无 scorer 时不提交 private_data；Server 不解析或派发评分材料/隐藏 harness；Worker 不创建 ScorerHost 但仍完成收集、冻结、清理和轨迹封存；Server 按权威计划核验 score 应否存在。无评分的 completed 合法，配置了 scorer 却缺失应有评分的 completed 必须拒绝。只采集包允许省略 Scorer 入口，已有九个数据集继续保留原评分规则。
+交互返回协议按主方案第 5.4 节迁移：Agent.run 只返回 final_answer 内容列表，文本、补丁和文件引用复用 ContentPart；Environment 不再提供 finalize 或额外 artifacts 输出，state_snapshot 按需提供评分状态。Worker 直接组装 ScoreInput 和 EpisodeResult，并独自填写 termination_reason；状态只交给 Scorer。迁移时联动更新 Host 接口、SDK、schema、评分与结果消费者，验收空回答不被模型响应替换、评分状态不进入公开结果、无评分不读取状态，不保留旧输出包装兼容字段。
+
+轨迹采集作为本次目标协议的一部分实施：RunSpec.purpose 增加 trajectory_collection；dataset_package 唯一选择数据集代码包；scoring.enabled 在评测/训练必须为 true，在采集时由用户明确选择；training 仍只用于在线训练接入。继续使用同一 BatchRequest、Worker 和轨迹协议，不引入采集专用服务。limits.finalize_reserve_ms 统一表达提交校验、冻结及可选评分的预留时间，协议迁移时同步替换旧评分预留字段，不保留双入口。
+
+迁移需要联动检查：Bridge scoring.enabled=false 时不提交 private_data；Server 不解析或派发评分材料/隐藏 harness；Worker 不创建 ScorerHost 但仍完成提交校验、冻结、清理和轨迹封存；Server 按权威计划核验 score 应否存在。无评分的 completed 合法，开启评分 却缺失应有评分的 completed 必须拒绝。只采集包允许省略 Scorer 入口，已有九个数据集继续保留原评分规则。
 
 新增验收包括无 ground truth 的采集、采集并评分、评分失败保留轨迹、缺失应有评分拒绝、无评分器入口的包、重试后默认导出权威 attempt。采集导出与筛选不修改原事件，不自动成为新的 Hub 数据版本；缺少算法必需 token/logprob 的数据必须被训练消费端拒绝。当前本地参考覆盖协议和模拟端口执行，生产导出、存储、真实模型及后端需单独验收。
 
@@ -279,6 +285,7 @@ Worker 当前也不只是资源启动器。EpisodeExecutor（生产源码 `uenv-
 6. 增加新协议服务入口，现有 `v1` 保持冻结；
 7. 实现严格的序列化、反序列化、digest、schema-version 和重新生成无差异契约测试；
 8. 实现 Bridge 唯一的 `LegacyRequestAdapter`，兼容映射不得进入新核心。
+9. 接入可选 ScoreResult.generation_rewards：每项只含已有 generation_id 和 reward。同步 SDK、协议源、生成物、Rust 引用校验及 Bridge 训练导出；保持交互结束后一次 Scorer 调用。验收须证明缺项不补零、跨 attempt 或重复 ID 被拒绝、整体与过程分数不自动合并；不支持过程奖励的训练接入不得静默接受。字段规则见[字段规范第 2.1 节](field_conventions.md#21-整体评分与逐次生成评分)。
 
 退出条件：一个含义只有一个公共字段名；普通用户在不阅读 proto/JSON Schema 的情况下只看到当前需要填写的字段；Rust/Python round-trip 一致；未知字段、系统控制字段遮蔽、未知 schema 和已登记同义字段进入新接口时明确失败；疑似同义但无法确定的字段产生清晰警告，不宣称完全自动判断语义。
 
@@ -449,7 +456,7 @@ Worker 当前也不只是资源启动器。EpisodeExecutor（生产源码 `uenv-
 
 1. 新主流程中不存在根据数据集名称或 `env_type` 选择执行链的代码；
 2. 后端、Agent、工具、模型、资源和评分组件只从 `ExecutionPlan` 生效；
-3. 所有数据集都通过 `AgentRunner -> Environment -> Scorer`；
+3. 所有数据集都由 AgentRunner 发起受控交互并使用 Environment；仅 scoring.enabled=true 时调用本包 Scorer；
 4. 每个进入评分的 attempt 至多调用一次权威 Scorer，Server 只接纳一个 `EpisodeResult`；
 5. 所有 Agent 和数据集使用同一 `TrajectoryEvent`/`TrajectoryManifest`；
 6. Process、Docker、Podman 通过统一 Backend 契约和真实集成测试；
@@ -495,7 +502,7 @@ Worker 当前也不只是资源启动器。EpisodeExecutor（生产源码 `uenv-
 
 目标执行只使用已有 episode/attempt 的身份、预算和取消机制。Worker 管理 Agent 子进程或会话的关闭，不增加另一层 Agent 租约；任务清理时撤销工具访问，阻止迟到操作。复用 Python 进程不等于复用会话，每次任务的历史、工具绑定和凭据必须独立。是否需要进程复用依据实测，不以未经测量的启动开销为池化设计理由。
 
-迁移前对照测试保留现有真实 OpenHands runner、SDK、AgentControlService 和 gateway；迁移后测试保留真实 SDK、模型请求、受控工具和环境执行，不再要求经过已退役的旧池入口。两类报告明确注明执行路径，不能用伪造 Outcome 替代真实交互，也不能用删除旧接口来跳过工具或评分验证。
+迁移前对照测试保留现有真实 OpenHands runner、SDK、AgentControlService 和 gateway；迁移后测试保留真实 SDK、模型请求、受控工具和环境执行，不再要求经过已退役的旧池入口。两类报告明确注明执行路径，不能用伪造最终回答或产物 替代真实交互，也不能用删除旧接口来跳过工具或评分验证。
 
 ### 11.2 镜像和访问控制迁移
 
@@ -520,17 +527,19 @@ Worker 当前也不只是资源启动器。EpisodeExecutor（生产源码 `uenv-
 
 ### 11.3 工具接入与验收
 
-| 当前参考代码或源码快照 | 需要完成的迁移与验收 |
-|---|---|
-| 工具主要实现 ToolExecutor；没有完整的函数自动包装 | 将带类型和说明的函数包装到同一接口，生成工具描述；校验复杂输入、结构化/多模态返回和错误，不丢字段 |
-| Python 参考已实现 PlainAgent 多轮工具循环、两种历史策略及 Worker 预算错误收尾 | 接通真实 ComponentHost/RPC Context 和模型原生工具请求映射；复验多轮循环、预算与完整轨迹，不能把本地模拟测试当作端到端验收 |
-| `RunSpec.tools[]` 的 ToolBinding 只含 name/implementation/config；AgentManifest 与 ToolSpec 通过公共 interfaces 匹配；ExecutionPlan.tools[] 才补入 interface/adapter | schema、九包示例和 Rust PlanResolver 已同步；仍需用真实 Agent SDK 验证 MCP/原生接口声明与实际工具表一致 |
-| Python 工具到 MCP 的完整连接未实现 | Worker 管理本次执行的服务或受限会话，注入连接配置；已有外部服务的地址和凭据引用只在组件 config 配一次；核验实际工具名/schema/路由与计划一致，不开放额外工具 |
-| 远端源码 Runtime 仍调用 backend.call_tool，并用最近一次 generation_id 关联 | 本地 Rust 参考已改为 AgentRuntime → ToolHost，Backend 只提供 session 资源；生产迁移还要显式传递生成关联，并用真实 IPC 验证错误、超时、取消均产生配对 ToolResult 且只计数一次 |
-| OpenHands runner 显式注册原生工具，gateway 替换部分执行器 | 保留原生操作语义，验证终端会话、编辑命令、工作目录、取消和返回格式；优先 SDK 注入入口，限制全局 monkey patch 的影响 |
-| 原生工具清单及隔离尚未真实验收 | 按锁定 SDK 核验 finish 等隐式工具、权限和状态隔离；需要外部能力的工具不能冒充 agent_state；同一有状态工具分别经直接接口和 MCP 验证同一任务状态与轨迹 |
+工具设计以[主方案第 6.4 节](../uenv_design.md#64-工具定义接入与调用)为准。RunSpec.tools 是唯一选择来源；用户工具在所属包 tools.py 定义，原生工具保留框架定义，由 Agent 接入维护者导出。原生工具随 Agent 包版本和 digest 管理，不逐个发布包装组件。SDK/MCP 由 Agent 集成固定，不恢复接口优先级协商。
 
-源码依据是本地 source 快照：OpenHands runner（生产源码 `integrations/openhands/run_swebenchpro_official.py:906`）、gateway 工具执行器（生产源码 `integrations/openhands/uenv_runtime/gateway_tools.py:300`）、工具重新注册（生产源码 `integrations/openhands/uenv_runtime/gateway_tools.py:421`）。这些代码不证明任意函数已能自动接入；本次未重新核验远端部署。
+本地参考已落实：
+
+- 删除 AgentManifest.supported_interfaces、ToolInterface、ToolSpec.interfaces 和 ResolvedToolBinding.interface/adapter；用 AgentManifest.provided_tools 导出原生工具，native_agent 由目录和解析器填写并校验所属 Agent。
+- Rust AgentRuntime.step 统一调用准入、参数验证、预算、取消检查与事件记录；SDK call_tool 只转交这个入口。原生和 Python 工具不分别维护预算。
+- 删除 Environment.parse_action/step、AgentContext.parse_action/step、models.action、action_schema、AnswerAction、EnvironmentTransition 及独立环境步数；九个包的普通回答由 Agent 直接提交。
+- ToolCall.arguments 是按工具 schema 校验的参数对象；ToolResult 的公开内容只有 observation。Python @tool 从签名生成输入 schema并校验返回类型；NativeToolAdapter 使用原生定义和执行器，转换为相同结果。
+- 普通问答零工具、PlainAgent 多轮工具反馈、状态工具终止、错误参数、重复调用身份、预算拒绝与原生 Agent 不兼容均须有测试；不能通过删除旧测试丢失仍有效的控制边界。
+
+Host 管道 RPC、MCP 服务连接授权/生命周期、真实 OpenHands Conversation 的工具代理与返回对象交还已在 design 实现并完成独立测试，见[参考实现第 12 节](reference_implementation.md#12-真实-agentmcp-与跨进程-rpc)。生产迁移尚需完成角色权限隔离部署、作用于 Backend session 的原生终端/文件工具适配，以及训练侧消费。原生 finish 保留 Agent 会话结束语义，不设置环境 terminated。共享环境状态的工具必须串行；一次原生/MCP 调用只有一个 tool_call_id 和一次预算计数。
+
+验证顺序是先运行本地契约和控制测试，再在独立 Linux 测试目录进行真实 Agent/工具/进程测试，最后验证训练接入。不能把格式转换单测或模拟端口测试标为真实 OpenHands、MCP 或进程隔离验收。未完成受控接入的原生工具不开放，未知或不兼容工具在模型调用前报错。
 
 ### 11.4 Hub 与数据输入迁移
 
@@ -561,3 +570,7 @@ SWE Verified/Lite/Pro/Smith：抽出仓库准备、依赖计划、测试 patch�
 性能验收使用真实 Worker、插件与 benchmark 输入，模拟只替换 LLM endpoint。迁移前对照保留真实 OpenHands runner/SDK/AgentControlService/gateway/容器工具链；目标验收经过 Worker 管理的真实 AgentRunner/SDK/工具链，不再要求保留已退役的旧池入口，报告明确注明路径。规模报告区分 DSCodeBench 与 SWE，覆盖三种 parallel_mode；可行时用 1024+ Workers、多容量波次、多 SWE 实例和记录过的采样种子、wrong_steps 分布。单 Worker 只算 smoke/preflight。本次文档和参考代码检查不构成这些验收结果。
 
 完成标准：业务差异全部在用户可发布的扩展包内，Bridge/Server/Worker 只执行稳定协议；新增数据集无需修改核心，故障处理不会按数据集分叉，已有功能及评分差异有可核验的迁移证据。
+
+交互迁移统一为系统 step(tool_call)：移除 Environment/AgentContext 的旧 parse_action 与作者 step、models.action/action_schema/AnswerAction；参数只在 tools.py 中工具函数或其引用的模型定义；环境上下文由系统注入。ToolResult 改为只通过 observation 保存公开返回内容，保留 status、错误、输出预览裁剪和调用身份；移除旧 content/data。删除 EnvironmentTransition、environment_step_index/count 和 max_environment_steps，保留 max_tool_calls。同步 schema 生成器、包加载器、组件目录、九个包、Counter 示例、PlainAgent、Rust 控制器、事件读取器、配置样例和测试；每一项均须完成后才能标记参考实现已迁移。
+
+验收覆盖普通问答一次生成零工具、状态工具多轮、无工具请求时的显式提交、错误参数在副作用前拒绝、同一状态实例的串行调用、原生工具和 MCP 使用同一授权入口、结束后拒绝新操作及生成长度截断。同一 tool_call_id 的重传不能重复执行，调用不明时不能盲重试；生成中的多个工具请求分别有调用身份。评分仍按 generation_id 关联；旧 max_environment_steps 配置明确拒绝或由显式迁移工具转换，不静默变成另一份上限。本地参考的统一工具接口及第 12 节的真实框架 SDK/RPC 场景已验证；全量原生工具、权限隔离部署和训练读取器仍需验收。

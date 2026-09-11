@@ -5,9 +5,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 use uenv_reference_control::contracts::ContractSchema;
 use uenv_reference_control::plan::{
-    AgentToolProfile, ComponentCatalog, ComponentMetadata, PlanResolver, RuntimeKind,
-    ToolInterfaceSupport, retry_execution_plan, seal_plan, validate_batch_submission,
-    validate_execution_plan,
+    AgentToolProfile, ComponentCatalog, ComponentMetadata, PlanResolver, RuntimeKind, ToolMetadata,
+    retry_execution_plan, seal_plan, validate_batch_submission, validate_execution_plan,
 };
 
 fn design_root() -> PathBuf {
@@ -37,7 +36,7 @@ fn insert_component(
     config_schema: &str,
     task_schema: &str,
     runtime_kind: Option<RuntimeKind>,
-    tool_interfaces: Vec<ToolInterfaceSupport>,
+    tool: Option<ToolMetadata>,
 ) {
     catalog
         .insert(ComponentMetadata {
@@ -50,7 +49,7 @@ fn insert_component(
             task_schemas: BTreeSet::from([task_schema.to_owned()]),
             private_schemas: BTreeSet::new(),
             native_profiles: BTreeSet::from(["example-only".to_owned()]),
-            tool_interfaces,
+            tool,
             default_runtime: None,
             requires_internet_access: false,
             runtime_kind,
@@ -74,7 +73,7 @@ fn catalog_rejects_a_conflicting_requested_digest() {
         "uenv://schemas/vnext/EmptyConfig",
         "uenv://schemas/vnext/InstructionInput",
         None,
-        vec![],
+        None,
     );
     let conflicting = json!({
         "id": "agents/example",
@@ -84,6 +83,38 @@ fn catalog_rejects_a_conflicting_requested_digest() {
     assert_eq!(
         catalog.get(&conflicting).unwrap_err().code,
         "COMPONENT_DIGEST_MISMATCH"
+    );
+}
+
+#[test]
+fn native_tools_must_match_selected_agent_and_owner_version() {
+    let schema = ContractSchema::bundled();
+    let plan =
+        read(design_root().join("reference/generated/episodes/swe_verified/execution_plan.json"));
+    validate_execution_plan(&plan, &schema).unwrap();
+    let mut wrong_agent = plan.clone();
+    wrong_agent["agent"]["implementation"]["id"] = json!("agents/plain");
+    assert_eq!(
+        validate_execution_plan(&seal_plan(&wrong_agent).unwrap(), &schema)
+            .unwrap_err()
+            .code,
+        "NATIVE_TOOL_AGENT_MISMATCH"
+    );
+    let mut wrong_version = plan.clone();
+    wrong_version["tools"][0]["implementation"]["version"] = json!("other");
+    assert_eq!(
+        validate_execution_plan(&seal_plan(&wrong_version).unwrap(), &schema)
+            .unwrap_err()
+            .code,
+        "NATIVE_TOOL_VERSION_MISMATCH"
+    );
+    let mut old_interface = plan;
+    old_interface["tools"][0]["interface"] = json!("mcp.v1");
+    assert_eq!(
+        validate_execution_plan(&seal_plan(&old_interface).unwrap(), &schema)
+            .unwrap_err()
+            .code,
+        "UNKNOWN_FIELD:ResolvedToolBinding.interface"
     );
 }
 
@@ -151,10 +182,6 @@ fn nine_plans_are_rebuilt_by_one_rust_resolver() {
         let task_schema = package["task_schema"].as_str().unwrap();
         let mut catalog = ComponentCatalog::default();
 
-        assert_eq!(
-            expected["environment"]["implementation"], expected["scorer"]["implementation"],
-            "one dataset package must export both roles"
-        );
         let private_schemas = package
             .get("private_schema")
             .and_then(Value::as_str)
@@ -169,14 +196,14 @@ fn nine_plans_are_rebuilt_by_one_rust_resolver() {
             .collect();
         catalog
             .insert(ComponentMetadata {
-                component: expected["environment"]["implementation"].clone(),
+                component: expected["dataset_package"].clone(),
                 roles: BTreeSet::from(["environment".to_owned(), "scorer".to_owned()]),
                 role_config_schemas,
                 required_capabilities: strings(&package, "required_capabilities"),
                 task_schemas: BTreeSet::from([task_schema.to_owned()]),
                 private_schemas,
                 native_profiles: BTreeSet::from(["example-only".to_owned()]),
-                tool_interfaces: vec![],
+                tool: None,
                 default_runtime: package.get("runtime").cloned(),
                 requires_internet_access: package["internet_access"].as_bool().unwrap(),
                 runtime_kind: None,
@@ -190,7 +217,7 @@ fn nine_plans_are_rebuilt_by_one_rust_resolver() {
             run["agent"]["config"]["schema_ref"].as_str().unwrap(),
             task_schema,
             None,
-            vec![],
+            None,
         );
         let runtime_kind = if run
             .pointer("/backend/config/schema_ref")
@@ -210,7 +237,7 @@ fn nine_plans_are_rebuilt_by_one_rust_resolver() {
             run["backend"]["config"]["schema_ref"].as_str().unwrap(),
             task_schema,
             Some(runtime_kind),
-            vec![],
+            None,
         );
 
         for tool in expected["tools"].as_array().unwrap() {
@@ -221,21 +248,11 @@ fn nine_plans_are_rebuilt_by_one_rust_resolver() {
                 tool["config"]["schema_ref"].as_str().unwrap(),
                 task_schema,
                 None,
-                vec![ToolInterfaceSupport {
-                    interface: tool["interface"].as_str().unwrap().to_owned(),
-                    adapter: tool["adapter"].clone(),
+                Some(ToolMetadata {
+                    native_agent: tool.get("native_agent").cloned(),
                     execution_scope: tool["execution_scope"].as_str().unwrap().to_owned(),
                     required_capabilities: strings(tool, "required_capabilities"),
-                }],
-            );
-            insert_component(
-                &mut catalog,
-                tool["adapter"].clone(),
-                "tool_adapter",
-                "uenv://schemas/vnext/EmptyConfig",
-                task_schema,
-                None,
-                vec![],
+                }),
             );
         }
         if let Some(harness) = expected.pointer("/private_data/data/evaluation_plan/harness") {
@@ -246,7 +263,7 @@ fn nine_plans_are_rebuilt_by_one_rust_resolver() {
                 "uenv://schemas/vnext/EmptyConfig",
                 task_schema,
                 None,
-                vec![],
+                None,
             );
         }
         let required_names = if expected["tools"].as_array().unwrap().is_empty() {
@@ -257,7 +274,6 @@ fn nine_plans_are_rebuilt_by_one_rust_resolver() {
         let profile = AgentToolProfile {
             agent: expected["agent"]["implementation"].clone(),
             required_names,
-            supported_interfaces: vec!["openhands_native.v1".to_owned(), "mcp.v1".to_owned()],
         };
         let resolver = PlanResolver {
             schema: &schema,
@@ -276,7 +292,7 @@ fn nine_plans_are_rebuilt_by_one_rust_resolver() {
         let mut collection = run.clone();
         collection["purpose"] = json!("trajectory_collection");
         collection["run_id"] = json!("collection-test");
-        collection.as_object_mut().unwrap().remove("scorer");
+        collection["scoring"] = json!({"enabled": false});
         let mut source = episode.clone();
         source["private_data"] = json!({"schema_ref": "unavailable-private-schema", "data": {
             "evaluation_plan": {"harness": {"id": "unavailable/harness", "version": "1"}}
@@ -286,7 +302,7 @@ fn nine_plans_are_rebuilt_by_one_rust_resolver() {
                 Ok(image.clone())
             })
             .unwrap();
-        assert!(unscored.get("scorer").is_none());
+        assert_eq!(unscored["scoring"]["enabled"], false);
         assert!(unscored.get("private_data").is_none());
         validate_execution_plan(&unscored, &schema).unwrap();
         let mut wrong = unscored.clone();
@@ -295,7 +311,7 @@ fn nine_plans_are_rebuilt_by_one_rust_resolver() {
             validate_execution_plan(&seal_plan(&wrong).unwrap(), &schema)
                 .unwrap_err()
                 .code,
-            "MISSING_SCORER"
+            "SCORING_REQUIRED"
         );
         wrong["purpose"] = json!("trajectory_collection");
         wrong["training"] = json!({});
@@ -393,6 +409,43 @@ fn batch_submission_checks_config_reuse_and_member_identity() {
 }
 
 #[test]
+fn scoring_switch_and_package_selection_have_no_overrides() {
+    let schema = ContractSchema::bundled();
+    let baseline =
+        read(design_root().join("reference/generated/episodes/gsm8k/execution_plan.json"));
+    for (field, value, expected) in [
+        (
+            "implementation",
+            json!({"id": "other/package", "version": "2"}),
+            "UNKNOWN_SCORING_FIELD",
+        ),
+        ("enabled", json!(false), "SCORING_CONFIG_MISMATCH"),
+        ("enabled", json!("false"), "INVALID_SCORING_ENABLED"),
+    ] {
+        let mut invalid = baseline.clone();
+        invalid["scoring"][field] = value;
+        let error = validate_execution_plan(&seal_plan(&invalid).unwrap(), &schema).unwrap_err();
+        assert_eq!(error.code, expected);
+    }
+    let mut invalid = baseline.clone();
+    invalid["environment"]["implementation"] = json!({"id": "other/package", "version": "2"});
+    assert_eq!(
+        validate_execution_plan(&seal_plan(&invalid).unwrap(), &schema)
+            .unwrap_err()
+            .code,
+        "UNKNOWN_FIELD:TypedConfig.implementation"
+    );
+    let mut invalid = baseline.clone();
+    invalid["scorer"] = json!({"implementation": baseline["dataset_package"]});
+    assert_eq!(
+        validate_execution_plan(&seal_plan(&invalid).unwrap(), &schema)
+            .unwrap_err()
+            .code,
+        "UNKNOWN_FIELD:ExecutionPlan.scorer"
+    );
+}
+
+#[test]
 fn retry_changes_only_attempt_and_digest() {
     let schema = ContractSchema::bundled();
     let path = design_root().join("reference/generated/episodes/gsm8k/execution_plan.json");
@@ -430,6 +483,7 @@ fn contract_is_the_only_wire_field_dictionary() {
         BTreeSet::from([
             "error".to_owned(),
             "evidence".to_owned(),
+            "generation_rewards".to_owned(),
             "metrics".to_owned(),
             "reward".to_owned(),
             "scorer".to_owned(),

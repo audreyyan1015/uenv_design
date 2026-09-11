@@ -1,55 +1,45 @@
 components:
   agents/plain:
+    version: 1.0.0
     role: agent
     config_schema: uenv://schemas/vnext/PlainAgentConfig
   agents/openhands:
+    version: 1.0.0
     role: agent
     config_schema: uenv://schemas/vnext/OpenHandsAgentConfig
+    provided_tools:
+      terminal:
+        config_schema: uenv://schemas/vnext/ToolConfig
+        execution_scope: sandbox
+        required_capabilities:
+        - exec.v1
+        - filesystem.v1
+      file-editor:
+        config_schema: uenv://schemas/vnext/ToolConfig
+        execution_scope: sandbox
+        required_capabilities:
+        - exec.v1
+        - filesystem.v1
+      task-tracker:
+        config_schema: uenv://schemas/vnext/EmptyConfig
+        execution_scope: agent_state
+        required_capabilities: []
+      finish:
+        config_schema: uenv://schemas/vnext/EmptyConfig
+        execution_scope: agent_state
+        required_capabilities: []
   backends/process:
+    version: 1.0.0
     role: backend
     config_schema: uenv://schemas/vnext/ProcessBackendConfig
     consumes_image: false
   backends/docker:
+    version: 1.0.0
     role: backend
     config_schema: uenv://schemas/vnext/ContainerBackendConfig
     consumes_image: true
   backends/podman:
+    version: 1.0.0
     role: backend
     config_schema: uenv://schemas/vnext/ContainerBackendConfig
     consumes_image: true
-  tools/terminal:
-    role: tool
-    config_schema: uenv://schemas/vnext/ToolConfig
-    interface: mcp.v1
-    adapter:
-      id: adapters/openhands-terminal
-      version: 1.0.0
-    execution_scope: sandbox
-    required_capabilities: [exec.v1, filesystem.v1]
-  tools/file-editor:
-    role: tool
-    config_schema: uenv://schemas/vnext/ToolConfig
-    interface: mcp.v1
-    adapter:
-      id: adapters/openhands-file-editor
-      version: 1.0.0
-    execution_scope: sandbox
-    required_capabilities: [exec.v1, filesystem.v1]
-  tools/openhands-task-tracker:
-    role: tool
-    config_schema: uenv://schemas/vnext/EmptyConfig
-    interface: openhands_native.v1
-    adapter:
-      id: adapters/openhands-native-state
-      version: 1.0.0
-    execution_scope: agent_state
-    required_capabilities: []
-  tools/openhands-finish:
-    role: tool
-    config_schema: uenv://schemas/vnext/EmptyConfig
-    interface: openhands_native.v1
-    adapter:
-      id: adapters/openhands-native-state
-      version: 1.0.0
-    execution_scope: agent_state
-    required_capabilities: []

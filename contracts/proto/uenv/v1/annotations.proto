@@ -1,0 +1,11 @@
+syntax = "proto3";
+package uenv.v1;
+import "google/protobuf/descriptor.proto";
+extend google.protobuf.FieldOptions {
+  string field_rule = 51001;
+  bool required = 51002;
+}
+extend google.protobuf.MessageOptions {
+  string message_rule = 51003;
+  bool extension_schema = 51004;
+}

@@ -74,7 +74,7 @@ def main() -> None:
     registry = SchemaRegistry.bundled()
     for run_path in sorted((ROOT / "reference/runs").glob("*.yaml")):
         public_run = load_yaml(run_path)
-        selected = public_run["environment"]["implementation"]
+        selected = public_run["dataset_package"]
         package = next((p for p in packages if all(
             p["declaration"][key] == selected[key] for key in ("id", "version"))), None)
         if package is None:
@@ -113,15 +113,15 @@ def main() -> None:
         if private_data is not None:
             episode["private_data"] = private_data
 
-        run = expand_run(public_run, manifest, catalog)
-        if "scorer" not in run:
+        run = expand_run(public_run, [manifest], catalog)
+        if not run["scoring"]["enabled"]:
             episode.pop("private_data", None)
         batch = {"batch_id": episode["batch_id"], "run_spec": run, "episodes": [episode]}
         registry.validate("BatchRequest", batch)
         registry.validate("RunSpec", run)
         registry.validate("TaskSpec", task)
         registry.validate("EpisodeRequest", episode)
-        plan = fixture_plan(episode, run, manifest, registry, catalog)
+        plan = fixture_plan(episode, run, [manifest], registry, catalog)
 
         output = generated_root / "episodes" / name
         write_json(output / "batch_request.json", batch)

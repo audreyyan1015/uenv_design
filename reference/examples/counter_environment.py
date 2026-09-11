@@ -2,21 +2,18 @@
 from typing import Annotated
 
 from uenv.sdk import (
-    AgentRunner,
     Environment,
     Field,
     Observation,
-    Outcome,
     Scorer,
     ScoreResult,
-    Transition,
     UEnvModel,
     model_json_schema,
     text_part,
+    structured_part,
 )
 
 INPUT = "urn:example:counter:input:v1"
-ACTION = "urn:example:counter:action:v1"
 STATE = "urn:example:counter:state:v1"
 
 
@@ -25,17 +22,13 @@ class CounterInput(UEnvModel):
     note: Annotated[str | None, Field("Optional task note")] = None
 
 
-class CounterAction(UEnvModel):
-    increment: Annotated[int, Field("Increment for one step", minimum=1)]
-
-
 class CounterState(UEnvModel):
     value: Annotated[int, Field("Current counter value", minimum=0)]
     goal: Annotated[int, Field("Target counter value", minimum=1)]
 
 
 def register_schemas(registry):
-    for model, identifier in ((CounterInput, INPUT), (CounterAction, ACTION), (CounterState, STATE)):
+    for model, identifier in ((CounterInput, INPUT), (CounterState, STATE)):
         registry.register(model_json_schema(model, identifier))
 
 
@@ -48,8 +41,9 @@ class CounterEnvironment(Environment):
     def observe(self):
         state = CounterState(value=self.value, goal=self.goal)
         return Observation(
-            [text_part("Increase the counter to its goal."), {"kind": "artifact", "artifact": self.image}],
-            state,
+            [text_part("Increase the counter to its goal."),
+             {"kind": "artifact", "artifact": self.image}, structured_part(state)],
+            terminated=self.value >= self.goal,
         )
 
     def reset(self, task, context):
@@ -63,13 +57,6 @@ class CounterEnvironment(Environment):
         )
         return self.observe()
 
-    def step(self, action, context):
-        context.check()
-        if not isinstance(action, CounterAction) or action.increment != 1 or self.value >= self.goal:
-            raise ValueError("Invalid counter action or task already finished")
-        self.value += action.increment
-        return Transition(self.observe(), terminated=self.value >= self.goal, environment_reward=1 / self.goal)
-
     def state_snapshot(self, context):
         return CounterState(value=self.value, goal=self.goal)
 
@@ -80,7 +67,7 @@ class CounterEnvironment(Environment):
 
 class ProgressScorer(Scorer):
     def score(self, request, context):
-        state = request.outcome.state
+        state = request.state
         if not isinstance(state, CounterState):
             raise TypeError("ProgressScorer requires CounterState")
         progress = state.value / state.goal
@@ -92,13 +79,3 @@ class ProgressScorer(Scorer):
             ],
             reward=progress,
         )
-
-
-class CounterAgent(AgentRunner):
-    """Scripted test Agent; no model endpoint is called."""
-
-    async def run(self, context):
-        while True:
-            transition = await context.step(CounterAction(increment=1))
-            if transition.terminated:
-                return Outcome(termination_reason="environment_terminal")

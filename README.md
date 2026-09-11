@@ -12,7 +12,7 @@
 | AgentRunner、ToolExecutor、UEnvModel 及 schema 生成 | Python | `reference/sdk/src/uenv/sdk/`、`reference/extension_templates.py` |
 | schema、示例和模块清单生成 | Python 开发工具 | `scripts/build_*.py` |
 
-Python 中原有的 `EpisodeRuntime`、计划解析器、工具权威路由和 `SandboxBackend` 模板已经删除，避免系统控制职责在两种语言各实现一遍。Python Scorer 只填写 `success`、`metrics`、`reward`、`evidence`；Rust Worker 补全 `status`、`scorer`、`error`。
+Python 中原有的 `EpisodeRuntime`、计划解析器、工具权威路由和 `SandboxBackend` 模板已经删除，避免系统控制职责在两种语言各实现一遍。Python Scorer 填写 `success`、`metrics`、`reward`、`evidence` 和可选的 `generation_rewards`；Rust Worker 补全 `status`、`scorer`、`error`。
 
 本仓库根目录对应原工程的 `design` 目录，包含设计文档、参考代码、生成契约和示例。文档中的生产源码位置用于说明审查依据；生产源码快照及原工程其他文件不包含在本仓库中。
 
@@ -64,10 +64,12 @@ design/
 - [数据集示例](reference/datasets)：九个包都包含 `dataset.yaml`、`pyproject.toml`、`src/<package>/models.py`、三个专属入口和本地测试，共 27 个直接子类。
 - [公开运行示例](reference/runs)：独立于数据集包的 `run.yaml`，只含公开参数，不含 `schema_ref`。
 - [生成夹具](reference/generated)：发布后 manifest、包 schema、批次提交 batch_request.json 和 ExecutionPlan；run_spec.json、episode_request.json 是批次内容的独立阅读视图，用户不编辑这些文件。
-- [有状态环境示例](reference/examples/counter_environment.py)：说明 `Observation`、`Transition` 和 `Outcome`。
-- [机器可校验契约](contracts/uenv.schema.json)：当前本地参考生成物。目标生产协议以 `contracts/proto/uenv/v1/*.proto` 为唯一可编辑来源，并生成 Rust/Python 类型、JSON schema 和字段字典；数据集新增业务字段只在包内 `models.py` 定义，由发布工具生成包 schema。
+- [有状态环境示例](reference/examples/counter_environment.py)：演示统一 `Observation.content`、有状态动作以及独立的评分状态读取。
+- [机器可校验契约](contracts/uenv.schema.json)：当前本地参考生成物。公共字段已以 `contracts/proto/uenv/v1/*.proto` 为唯一可编辑来源，生成 Rust/Python 类型、JSON schema 和字段字典；数据集新增业务字段只在包内 `models.py` 定义，由发布工具生成包 schema。
 
-后续不引入 Agent 池。Agent 由 Worker 为当前 attempt 管理；模型服务端点来自最终 `ExecutionPlan.model`，Agent 不加载本地模型权重。Process、Docker、Podman 是 Rust `Backend` trait 的实现；Environment 不为不同后端编写组合适配器。
+工具参考已统一到 Rust `AgentRuntime.step`：`RunSpec.tools` 选择普通工具或 Agent 包内原生导出，原生格式由 [NativeToolAdapter](reference/sdk/src/uenv/sdk/tools.py)转换，原执行器保留。`Environment` 不再实现动作解析/执行，九个数据集与状态工具示例已同步。OpenHands 1.15 真实会话、MCP HTTP 服务与 Host RPC 已接通；复现命令和验证范围见[真实 Agent 接入](docs/development/reference_implementation.md#12-真实-agentmcp-与跨进程-rpc)。
+
+后续不引入 Agent 池。Agent 由 Worker 为当前 attempt 管理；模型服务端点来自最终 `ExecutionPlan.model`，Agent 不加载本地模型权重。Process、Docker、Podman 的目标驱动统一实现 Rust `Backend` trait；参考另含有限命令后端实现与 Linux 专用测试，验证范围见验证记录；Environment 不为不同后端编写组合适配器。
 
 ## 谁需要运行哪些命令
 
@@ -89,6 +91,6 @@ python scripts/build_module_map.py
 python scripts/validate_design.py
 ```
 
-`scripts/validate_design.py` 会离线运行 Rust 控制测试和 Python 契约/评分规则测试。当前参考使用合成数据、模拟模型与内存产物存储；它没有完成真实 Docker/Podman/Process 驱动、OpenHands、MCP、官方 benchmark、RPC、持久化或生产部署。
+`scripts/validate_design.py` 会离线运行 Rust 控制测试和 Python 契约/评分规则测试。当前测试使用合成数据和脚本模型响应，覆盖独立 Host 进程以及内存/本地持久文件存储；本机检查不执行 Linux 专用测试；有限后端命令实现及历史 Linux 测试范围见验证记录。真实 OpenHands/MCP 仅覆盖验证记录中的场景；本地事务、重启恢复和 Host RPC 已有测试，官方 benchmark、完整后端角色隔离与生产部署仍未验收。
 
-轨迹采集复用相同执行链：purpose=trajectory_collection，省略 scorer 表示不评分。参见[主方案第 8.2 节](docs/uenv_design.md#82-评测训练与轨迹采集)、[用户指南第 2.6 节](docs/guides/user_guide.md#26-轨迹采集怎样配置)，以及[只采集](reference/runs/gsm8k_collection.yaml)和[采集并评分](reference/runs/gsm8k_collection_scored.yaml)配置。对应生成请求和计划位于 reference/generated/episodes 下的同名示例目录。
+轨迹采集复用相同执行链：purpose=trajectory_collection，scoring.enabled=false 表示不评分。参见[主方案第 8.2 节](docs/uenv_design.md#82-评测训练与轨迹采集)、[用户指南第 2.6 节](docs/guides/user_guide.md#26-轨迹采集怎样配置)，以及[只采集](reference/runs/gsm8k_collection.yaml)和[采集并评分](reference/runs/gsm8k_collection_scored.yaml)配置。对应生成请求和计划位于 reference/generated/episodes 下的同名示例目录。

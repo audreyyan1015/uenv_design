@@ -48,19 +48,23 @@
     "finalize_reserve_ms": 120000,
     "max_generations": 1,
     "max_tool_calls": 0,
-    "max_environment_steps": 0,
     "max_total_output_tokens": 32768
   },
   "environment": {
-    "implementation": {
-      "id": "datasets/olymmath",
-      "version": "1.0.0",
-      "digest": "sha256:6ab3ce32979004ae0ea07400303cdd0a6a7ae647eb46d63c045bf6436b2da160"
-    },
+    "schema_ref": "uenv://schemas/vnext/EmptyConfig",
+    "data": {}
+  },
+  "scoring": {
+    "enabled": true,
     "config": {
       "schema_ref": "uenv://schemas/vnext/EmptyConfig",
       "data": {}
     }
+  },
+  "dataset_package": {
+    "id": "datasets/olymmath",
+    "version": "1.0.0",
+    "digest": "sha256:6ab3ce32979004ae0ea07400303cdd0a6a7ae647eb46d63c045bf6436b2da160"
   },
   "agent": {
     "implementation": {
@@ -74,17 +78,6 @@
         "history_policy": "full",
         "system_prompt": ""
       }
-    }
-  },
-  "scorer": {
-    "implementation": {
-      "id": "datasets/olymmath",
-      "version": "1.0.0",
-      "digest": "sha256:6ab3ce32979004ae0ea07400303cdd0a6a7ae647eb46d63c045bf6436b2da160"
-    },
-    "config": {
-      "schema_ref": "uenv://schemas/vnext/EmptyConfig",
-      "data": {}
     }
   },
   "backend": {
@@ -111,5 +104,5 @@
   "required_capabilities": [],
   "internet_access": false,
   "deadline_at_ms": 1800000300000,
-  "plan_digest": "sha256:dd69447bd8ed65fadbec631b290ed753b406a5d2f6cf2d2e5fbf02e5bc52c741"
+  "plan_digest": "sha256:62375d124a67591db256f1702caf9a6e709ff7e4768053335e115c109e1fbb6c"
 }

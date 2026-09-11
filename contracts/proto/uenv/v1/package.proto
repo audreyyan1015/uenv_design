@@ -1,0 +1,51 @@
+syntax = "proto3";
+package uenv.v1;
+import "google/protobuf/struct.proto";
+import "uenv/v1/annotations.proto";
+import "uenv/v1/common.proto";
+import "uenv/v1/task.proto";
+
+message ToolSpec {
+  option (message_rule) = "{\"description\":\"用户工具发布声明\",\"additionalProperties\":false}";
+  optional ComponentRef implementation = 1 [json_name = "implementation", (required) = true];
+  optional string entrypoint = 2 [json_name = "entrypoint", (required) = true, (field_rule) = "{\"description\":\"Python 函数或 ToolExecutor 的 module:symbol 入口\"}"];
+  optional string config_schema = 3 [json_name = "config_schema", (required) = true, (field_rule) = "{\"description\":\"ToolExecutor 构造配置的精确 schema 标识\"}"];
+  optional string description = 4 [json_name = "description", (required) = true, (field_rule) = "{\"description\":\"给 Agent 的说明\"}"];
+  optional string execution_scope = 5 [json_name = "execution_scope", (required) = true, (field_rule) = "{\"description\":\"工具的受管执行位置\",\"enum\":[\"agent_state\",\"sandbox\",\"external_service\"]}"];
+  repeated string required_capabilities = 6 [json_name = "required_capabilities", (required) = true, (field_rule) = "{\"description\":\"用于兼容性检查，不授予权限\",\"items\":{\"description\":\"版本化运行能力标识\"}}"];
+  optional ArtifactRef input_schema = 7 [json_name = "input_schema", (required) = true, (field_rule) = "{\"description\":\"作者发布参数 schema，ToolHost 在执行前校验 arguments\"}"];
+  optional ArtifactRef output_schema = 8 [json_name = "output_schema", (field_rule) = "{\"description\":\"作者按需发布结构化返回 schema，ToolHost 校验工具返回值；纯文本工具省略\"}"];
+  optional string side_effect = 9 [json_name = "side_effect", (required) = true, (field_rule) = "{\"description\":\"副作用与重试依据\",\"enum\":[\"read_only\",\"idempotent\",\"non_idempotent\"]}"];
+}
+
+message AgentManifest {
+  option (message_rule) = "{\"description\":\"自定义 Agent 的发布声明；按接口复用工具，不逐个登记所有工具实现\",\"additionalProperties\":false}";
+  optional ComponentRef implementation = 1 [json_name = "implementation", (required) = true];
+  optional string entrypoint = 2 [json_name = "entrypoint", (required) = true, (field_rule) = "{\"description\":\"AgentRunner 的 module:Class 入口\"}"];
+  optional string config_schema = 3 [json_name = "config_schema", (required) = true, (field_rule) = "{\"description\":\"AgentRunner 构造配置的精确 schema 标识\"}"];
+  repeated ToolSpec provided_tools = 4 [json_name = "provided_tools", (required) = true, (field_rule) = "{\"description\":\"框架接入代码导出的原生工具描述；来自原框架定义，不要求用户重复编写或单独发布\"}"];
+  repeated string required_tool_names = 5 [json_name = "required_tool_names", (required) = true, (field_rule) = "{\"description\":\"允许为空；空数组表示无必需工具\",\"uniqueItems\":true,\"items\":{\"description\":\"Agent 必须可见的内置工具名\"}}"];
+}
+
+message EntryPoints {
+  option (message_rule) = "{\"description\":\"环境包 Python 入口，均为 module:Class\",\"additionalProperties\":false}";
+  optional string dataset_adapter = 1 [json_name = "dataset_adapter", (required) = true, (field_rule) = "{\"description\":\"原始行 -> PreparedSample\"}"];
+  optional string environment = 2 [json_name = "environment", (required) = true, (field_rule) = "{\"description\":\"Environment 实现\"}"];
+  optional string scorer = 3 [json_name = "scorer", (field_rule) = "{\"description\":\"提供评分时声明的专属 Scorer 入口；仅采集的包可省略\"}"];
+}
+
+message PackageManifest {
+  option (message_rule) = "{\"description\":\"统一环境包，不绑定 agent 或 backend\",\"additionalProperties\":false,\"allOf\":[{\"if\":{\"properties\":{\"entrypoints\":{\"required\":[\"scorer\"]}}},\"then\":{\"properties\":{\"config_schemas\":{\"required\":[\"scorer\"]}}},\"else\":{\"properties\":{\"config_schemas\":{\"not\":{\"required\":[\"scorer\"]}}}}}]}";
+  optional RuntimeSpec runtime = 1 [json_name = "runtime", (field_rule) = "{\"description\":\"数据集包默认镜像候选\"}"];
+  optional string id = 2 [json_name = "id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string version = 3 [json_name = "version", (required) = true, (field_rule) = "{\"description\":\"精确版本\"}"];
+  optional EntryPoints entrypoints = 4 [json_name = "entrypoints", (required) = true];
+  optional string task_schema = 5 [json_name = "task_schema", (required) = true, (field_rule) = "{\"description\":\"任务业务字段 schema 标识\"}"];
+  optional string private_schema = 6 [json_name = "private_schema", (field_rule) = "{\"description\":\"私有评分字段 schema 标识\"}"];
+  optional google.protobuf.Struct config_schemas = 7 [json_name = "config_schemas", (required) = true, (field_rule) = "{\"description\":\"已声明运行角色各自接受的配置 schema；scorer 与同名入口同时出现或省略\",\"properties\":{\"environment\":{\"type\":\"string\",\"description\":\"Environment.config 接受的 schema 标识\"},\"scorer\":{\"type\":\"string\",\"description\":\"Scorer.config 接受的 schema 标识\"}},\"required\":[\"environment\"],\"additionalProperties\":false}"];
+  optional bool internet_access = 8 [json_name = "internet_access", (required) = true, (field_rule) = "{\"description\":\"Environment 是否需要公共互联网；数据行、RunSpec、Agent 和 Tool 不得覆盖\"}"];
+  repeated string required_capabilities = 9 [json_name = "required_capabilities", (required) = true, (field_rule) = "{\"description\":\"部署所需的 Worker 功能；不写 Docker/OpenHands 名称，也不授予访问权限\",\"items\":{\"description\":\"运行能力名\"}}"];
+  repeated ArtifactRef artifacts = 10 [json_name = "artifacts", (required) = true, (field_rule) = "{\"description\":\"代码 wheel 和显式声明的运行文件；镜像只由 runtime.image 引用\"}"];
+  repeated ToolSpec provided_tools = 11 [json_name = "provided_tools", (required) = true, (field_rule) = "{\"description\":\"包可提供的工具声明；本次启用项只由 RunSpec.tools 决定\"}"];
+  repeated ArtifactRef schemas = 12 [json_name = "schemas", (required) = true, (field_rule) = "{\"description\":\"包发布的带 $id 的 JSON Schema，注册前校验 digest\"}"];
+}

@@ -1,13 +1,11 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Value, json};
 
 use crate::contracts::{
     ContractSchema, array, bool_field, canonical_bytes, object, string, u64_field,
 };
-use crate::ports::{
-    ArtifactStore, Backend, Cancellation, Clock, EnvironmentHost, ModelProvider, ToolHost,
-};
+use crate::ports::{Backend, Cancellation, Clock, FileStore, ModelProvider, ToolHost};
 use crate::{ControlError, Result};
 
 // Storage policy, not a dataset or RunSpec option. Large payloads must be
@@ -18,7 +16,6 @@ const TRAJECTORY_SEGMENT_MAX_BYTES: usize = 4 * 1024 * 1024;
 pub struct Usage {
     pub generation_count: u64,
     pub tool_call_count: u64,
-    pub environment_step_count: u64,
     pub output_token_count: u64,
 }
 
@@ -27,7 +24,6 @@ impl Usage {
         json!({
             "generation_count": self.generation_count,
             "tool_call_count": self.tool_call_count,
-            "environment_step_count": self.environment_step_count,
             "output_token_count": self.output_token_count,
         })
     }
@@ -36,7 +32,6 @@ impl Usage {
         Ok(Self {
             generation_count: u64_field(value, "generation_count")?,
             tool_call_count: u64_field(value, "tool_call_count")?,
-            environment_step_count: u64_field(value, "environment_step_count")?,
             output_token_count: u64_field(value, "output_token_count")?,
         })
     }
@@ -47,7 +42,6 @@ pub struct BudgetEnforcer {
     interaction_deadline_at_ms: u64,
     max_generations: u64,
     max_tool_calls: u64,
-    max_environment_steps: u64,
     max_total_output_tokens: u64,
     usage: Usage,
 }
@@ -67,7 +61,6 @@ impl BudgetEnforcer {
             interaction_deadline_at_ms,
             max_generations: u64_field(limits, "max_generations")?,
             max_tool_calls: u64_field(limits, "max_tool_calls")?,
-            max_environment_steps: u64_field(limits, "max_environment_steps")?,
             max_total_output_tokens: u64_field(limits, "max_total_output_tokens")?,
             usage,
         };
@@ -103,7 +96,6 @@ impl BudgetEnforcer {
     fn validate_usage(&self) -> Result<()> {
         if self.usage.generation_count > self.max_generations
             || self.usage.tool_call_count > self.max_tool_calls
-            || self.usage.environment_step_count > self.max_environment_steps
             || self.usage.output_token_count > self.max_total_output_tokens
         {
             return Err(ControlError::new("CONSUMED_USAGE_EXCEEDS_LIMITS"));
@@ -162,15 +154,6 @@ impl BudgetEnforcer {
         Ok(())
     }
 
-    pub fn begin_environment_step(&mut self, clock: &dyn Clock) -> Result<()> {
-        self.check_interaction(clock)?;
-        if self.usage.environment_step_count >= self.max_environment_steps {
-            return Err(ControlError::new("ENVIRONMENT_STEP_LIMIT"));
-        }
-        self.usage.environment_step_count += 1;
-        Ok(())
-    }
-
     pub fn remaining_finalize_ms(&self, clock: &dyn Clock) -> Result<u64> {
         let now = clock.monotonic_ms();
         if now >= self.deadline_at_ms {
@@ -207,11 +190,23 @@ pub struct TrajectoryWriter {
     attempt_id: u64,
     task_id: String,
     events: Vec<Value>,
+    next_sequence: u64,
     sealed: bool,
     complete: bool,
+    spool: Option<crate::storage::EventSpool>,
 }
 
 impl TrajectoryWriter {
+    pub(crate) fn begin_operation(&mut self) -> bool {
+        let previous = self.complete;
+        self.complete = false;
+        previous
+    }
+
+    pub(crate) fn finish_operation(&mut self, previous_complete: bool) {
+        self.complete = previous_complete;
+    }
+
     pub fn from_plan(plan: &Value, schema: &ContractSchema) -> Result<Self> {
         Ok(Self {
             schema: schema.clone(),
@@ -224,9 +219,27 @@ impl TrajectoryWriter {
                 .ok_or_else(|| ControlError::new("INVALID_TASK_ID"))?
                 .to_owned(),
             events: Vec::new(),
+            next_sequence: 0,
             sealed: false,
             complete: true,
+            spool: None,
         })
+    }
+
+    pub fn with_spool(
+        plan: &Value,
+        schema: &ContractSchema,
+        root: &std::path::Path,
+    ) -> Result<Self> {
+        let mut writer = Self::from_plan(plan, schema)?;
+        let spool = crate::storage::EventSpool::open(root, plan)?;
+        let (events, next) = spool.recover()?;
+        if next != 0 {
+            return Err(ControlError::new("ATTEMPT_ALREADY_STARTED"));
+        }
+        writer.events = events;
+        writer.spool = Some(spool);
+        Ok(writer)
     }
 
     pub fn record(&mut self, kind: &str, payload: Value, now_ms: u64) -> Result<String> {
@@ -237,9 +250,44 @@ impl TrajectoryWriter {
         result
     }
 
+    pub fn persist_usage(&self, usage: &Usage) -> Result<()> {
+        if let Some(spool) = &self.spool {
+            spool.reserve_usage(&usage.to_value())?;
+        }
+        Ok(())
+    }
+
+    /// Recover evidence only. The same attempt is never restarted or scored
+    /// after a process crash because in-flight effects may be unknown.
+    pub fn recover_partial(
+        plan: &Value,
+        schema: &ContractSchema,
+        root: &std::path::Path,
+    ) -> Result<Self> {
+        let mut writer = Self::from_plan(plan, schema)?;
+        let spool = crate::storage::EventSpool::open(root, plan)?;
+        let (events, next) = spool.recover()?;
+        for event in &events {
+            schema.validate("TrajectoryEvent", event)?;
+        }
+        writer.events = events;
+        writer.next_sequence = next;
+        writer.complete = false;
+        writer.spool = Some(spool);
+        Ok(writer)
+    }
+
     fn try_record(&mut self, kind: &str, payload: Value, now_ms: u64) -> Result<String> {
         if self.sealed {
             return Err(ControlError::new("TRAJECTORY_ALREADY_SEALED"));
+        }
+        let sequence = self.next_sequence;
+        self.next_sequence = self
+            .next_sequence
+            .checked_add(1)
+            .ok_or_else(|| ControlError::new("TRAJECTORY_SEQUENCE_OVERFLOW"))?;
+        if let Some(spool) = &mut self.spool {
+            spool.reserve(sequence)?;
         }
         let payload_type = match kind {
             "state" => "StateEvent",
@@ -247,14 +295,12 @@ impl TrajectoryWriter {
             "generation" => "GenerationEvent",
             "tool_call" => "ToolCall",
             "tool_result" => "ToolResult",
-            "environment_transition" => "EnvironmentTransition",
             "score" => "ScoreResult",
             "error" => "ErrorRecord",
             "terminal" => "TerminalEvent",
             _ => return Err(ControlError::new("UNKNOWN_TRAJECTORY_EVENT_KIND")),
         };
         self.schema.validate_shape(payload_type, &payload)?;
-        let sequence = self.events.len() as u64;
         let event_id = format!("{}:{}:{}", self.episode_id, self.attempt_id, sequence);
         let event = json!({
             "schema_version": "vnext.3",
@@ -275,11 +321,14 @@ impl TrajectoryWriter {
         if canonical_bytes(&event)?.len() + 1 > TRAJECTORY_SEGMENT_MAX_BYTES {
             return Err(ControlError::new("TRAJECTORY_EVENT_TOO_LARGE"));
         }
+        if let Some(spool) = &mut self.spool {
+            spool.append(&event)?;
+        }
         self.events.push(event);
         Ok(event_id)
     }
 
-    fn write_segments(&self, artifacts: &mut dyn ArtifactStore) -> Result<Vec<Value>> {
+    fn write_segments(&self, artifacts: &mut dyn FileStore) -> Result<Vec<Value>> {
         encode_jsonl_segments(&self.events, TRAJECTORY_SEGMENT_MAX_BYTES)?
             .iter()
             .map(|segment| artifacts.put_bytes(segment, "application/x-ndjson"))
@@ -290,7 +339,7 @@ impl TrajectoryWriter {
         &self,
         trajectory_status: &str,
         now_ms: u64,
-        artifacts: &mut dyn ArtifactStore,
+        artifacts: &mut dyn FileStore,
     ) -> Result<Value> {
         let segments = self.write_segments(artifacts)?;
         let manifest = json!({
@@ -309,7 +358,7 @@ impl TrajectoryWriter {
         artifacts.put_json(&manifest)
     }
 
-    pub fn checkpoint(&mut self, now_ms: u64, artifacts: &mut dyn ArtifactStore) -> Result<Value> {
+    pub fn checkpoint(&mut self, now_ms: u64, artifacts: &mut dyn FileStore) -> Result<Value> {
         let result = self.write_manifest("scoring_checkpoint", now_ms, artifacts);
         if result.is_err() {
             self.complete = false;
@@ -317,7 +366,7 @@ impl TrajectoryWriter {
         result
     }
 
-    pub fn seal(&mut self, now_ms: u64, artifacts: &mut dyn ArtifactStore) -> Result<Value> {
+    pub fn seal(&mut self, now_ms: u64, artifacts: &mut dyn FileStore) -> Result<Value> {
         let trajectory_status = if self.complete {
             "final_complete"
         } else {
@@ -372,7 +421,6 @@ pub struct AgentRuntime<'a> {
     pub clock: &'a dyn Clock,
     pub cancellation: &'a dyn Cancellation,
     pub tool_host: &'a mut dyn ToolHost,
-    pub environment_host: &'a mut dyn EnvironmentHost,
     pub model_provider: &'a mut dyn ModelProvider,
     pub budget: &'a mut BudgetEnforcer,
     pub trajectory: &'a mut TrajectoryWriter,
@@ -381,12 +429,15 @@ pub struct AgentRuntime<'a> {
     tools: Vec<Value>,
     seed: u64,
     current_observation: Value,
+    budget_denied: bool,
+    last_generation_limited: bool,
     episode_id: String,
     attempt_id: u64,
     generation_ids: BTreeSet<String>,
+    generated_calls: BTreeMap<String, Value>,
+    fixed_parameter_version: Option<Value>,
     tool_call_ids: BTreeSet<String>,
     next_generation_index: u64,
-    next_environment_step_index: u64,
 }
 
 impl<'a> AgentRuntime<'a> {
@@ -397,7 +448,6 @@ impl<'a> AgentRuntime<'a> {
         clock: &'a dyn Clock,
         cancellation: &'a dyn Cancellation,
         tool_host: &'a mut dyn ToolHost,
-        environment_host: &'a mut dyn EnvironmentHost,
         model_provider: &'a mut dyn ModelProvider,
         budget: &'a mut BudgetEnforcer,
         trajectory: &'a mut TrajectoryWriter,
@@ -409,7 +459,6 @@ impl<'a> AgentRuntime<'a> {
             clock,
             cancellation,
             tool_host,
-            environment_host,
             model_provider,
             budget,
             trajectory,
@@ -421,20 +470,27 @@ impl<'a> AgentRuntime<'a> {
             tools: array(plan, "tools")?.clone(),
             seed: u64_field(plan, "seed")?,
             current_observation: initial_observation.clone(),
+            budget_denied: false,
+            last_generation_limited: false,
             episode_id: string(plan, "episode_id")?.to_owned(),
             attempt_id: u64_field(plan, "attempt_id")?,
             generation_ids: BTreeSet::new(),
+            generated_calls: BTreeMap::new(),
+            fixed_parameter_version: None,
             tool_call_ids: BTreeSet::new(),
             next_generation_index: 0,
-            next_environment_step_index: 0,
         })
     }
 
     pub fn generate(&mut self, messages: &Value) -> Result<Value> {
-        self.check_active()?;
-        let messages = messages
-            .as_array()
-            .ok_or_else(|| ControlError::new("MESSAGES_MUST_BE_ARRAY"))?;
+        let result = self.generate_inner(messages);
+        self.record_budget_denial(result)
+    }
+
+    fn generate_inner(&mut self, messages: &Value) -> Result<Value> {
+        self.check_interaction_open()?;
+        let messages = prepare_model_messages(messages, self.schema)
+            .map_err(|error| error.in_phase("model"))?;
         let mut model = object(&self.model, "ModelSpec")?.clone();
         let generation = model
             .get_mut("generation")
@@ -478,6 +534,13 @@ impl<'a> AgentRuntime<'a> {
                 .unwrap()
                 .insert("training".to_owned(), training.clone());
         }
+        let trace_was_complete = self.trajectory.complete;
+        self.trajectory.complete = false; // Execution may happen before a valid event returns.
+        let mut reservation = self.budget.usage();
+        reservation.output_token_count = reservation
+            .output_token_count
+            .saturating_add(configured.min(remaining_tokens));
+        self.trajectory.persist_usage(&reservation)?;
         let event = self.model_provider.generate(&command).map_err(|error| {
             error
                 .in_phase("model")
@@ -500,6 +563,13 @@ impl<'a> AgentRuntime<'a> {
                 .in_phase("model")
                 .with_operation(generation_id));
         }
+        for field in ["model_id", "source"] {
+            if event.get(field) != self.model.get(field) {
+                return Err(ControlError::new("MODEL_IDENTITY_MISMATCH")
+                    .in_phase("model")
+                    .with_operation(generation_id));
+            }
+        }
         let output_tokens = self.validate_generation_trace(&event).map_err(|error| {
             error
                 .in_phase("model")
@@ -515,14 +585,66 @@ impl<'a> AgentRuntime<'a> {
                 .in_phase("model")
                 .with_operation(generation_id.clone())
         })?;
+        if output_tokens > configured.min(remaining_tokens) {
+            return Err(ControlError::new("MODEL_OUTPUT_LIMIT_EXCEEDED")
+                .in_phase("model")
+                .with_operation(generation_id));
+        }
         self.trajectory
             .record("generation", event.clone(), self.clock.unix_time_ms())
             .map_err(|error| error.in_phase("persist").with_operation(generation_id))?;
+        self.trajectory.persist_usage(&self.budget.usage())?;
+        self.trajectory.complete = trace_was_complete;
+        for call in optional_array(&event, "tool_calls")?.into_iter().flatten() {
+            self.generated_calls
+                .insert(string(call, "tool_call_id")?.to_owned(), call.clone());
+        }
+        if self
+            .training
+            .as_ref()
+            .is_some_and(|v| v["version_policy"] == "fixed_episode")
+        {
+            self.fixed_parameter_version = event.get("parameter_version").cloned();
+        }
         self.check_active()?;
+        self.last_generation_limited = event["finish_reason"] == "length";
         Ok(event)
     }
 
     fn validate_generation_trace(&self, event: &Value) -> Result<u64> {
+        if let Some(training) = &self.training {
+            let policy = string(event, "policy_version")?;
+            if policy.is_empty() {
+                return Err(ControlError::new("MODEL_POLICY_VERSION_MISSING"));
+            }
+            match string(training, "version_policy")? {
+                "fixed_episode" => {
+                    if policy != string(training, "requested_policy_version")?
+                        || self
+                            .fixed_parameter_version
+                            .as_ref()
+                            .is_some_and(|v| event.get("parameter_version") != Some(v))
+                    {
+                        return Err(ControlError::new("MODEL_POLICY_VERSION_MISMATCH"));
+                    }
+                    u64_field(event, "parameter_version")?;
+                }
+                "per_generation" => {
+                    u64_field(event, "parameter_version")?;
+                }
+                _ => return Err(ControlError::new("INVALID_VERSION_POLICY")),
+            }
+        }
+        for part in array(event, "response")? {
+            self.schema.validate_shape("ContentPart", part)?;
+        }
+        let finish_reason = string(event, "finish_reason")?;
+        if !self.schema.definition("GenerationEvent")?["properties"]["finish_reason"]["enum"]
+            .as_array()
+            .is_some_and(|values| values.iter().any(|v| v == finish_reason))
+        {
+            return Err(ControlError::new("INVALID_FINISH_REASON"));
+        }
         // Proposed calls are not executed here. The same bindings are checked
         // again when Agent requests the side effect through call_tool.
         let proposed = optional_array(event, "tool_calls")?;
@@ -535,7 +657,10 @@ impl<'a> AgentRuntime<'a> {
         for call in proposed.into_iter().flatten() {
             self.schema.validate_shape("ToolCall", call)?;
             let id = string(call, "tool_call_id")?;
-            if !proposed_ids.insert(id) || self.tool_call_ids.contains(id) {
+            if !proposed_ids.insert(id)
+                || self.generated_calls.contains_key(id)
+                || self.tool_call_ids.contains(id)
+            {
                 return Err(ControlError::new("DUPLICATE_TOOL_CALL_ID"));
             }
             if call.get("generation_id") != event.get("generation_id") {
@@ -568,6 +693,24 @@ impl<'a> AgentRuntime<'a> {
         if loss_mask.is_some_and(|values| Some(values.len()) != output_token_ids.map(Vec::len)) {
             return Err(ControlError::new("LOSS_MASK_LENGTH_MISMATCH"));
         }
+        for field in ["input_token_ids", "output_token_ids"] {
+            if optional_array(event, field)?
+                .is_some_and(|values| values.iter().any(|v| v.as_u64().is_none()))
+            {
+                return Err(ControlError::new("INVALID_TOKEN_ID"));
+            }
+        }
+        if output_logprobs.is_some_and(|values| {
+            values
+                .iter()
+                .any(|v| !v.as_f64().is_some_and(f64::is_finite))
+        }) {
+            return Err(ControlError::new("INVALID_OUTPUT_LOGPROB"));
+        }
+        if loss_mask.is_some_and(|values| values.iter().any(|v| !matches!(v.as_u64(), Some(0 | 1))))
+        {
+            return Err(ControlError::new("INVALID_LOSS_MASK"));
+        }
 
         let token_trace_required = self
             .training
@@ -595,8 +738,13 @@ impl<'a> AgentRuntime<'a> {
         Ok(output_token_count)
     }
 
-    pub fn call_tool(&mut self, call: &Value) -> Result<Value> {
-        self.check_active()?;
+    pub fn step(&mut self, call: &Value) -> Result<Value> {
+        let result = self.step_inner(call);
+        self.record_budget_denial(result)
+    }
+
+    fn step_inner(&mut self, call: &Value) -> Result<Value> {
+        self.check_interaction_open()?;
         self.schema
             .validate_shape("ToolCall", call)
             .map_err(|error| error.in_phase("tool"))?;
@@ -611,6 +759,15 @@ impl<'a> AgentRuntime<'a> {
             return Err(ControlError::new("DUPLICATE_TOOL_CALL_ID")
                 .in_phase("tool")
                 .with_operation(tool_call_id));
+        }
+        let generated = self
+            .generated_calls
+            .get(&tool_call_id)
+            .ok_or_else(|| ControlError::new("TOOL_CALL_NOT_GENERATED").in_phase("tool"))?;
+        for field in ["generation_id", "name", "implementation", "arguments"] {
+            if call.get(field) != generated.get(field) {
+                return Err(ControlError::new("TOOL_CALL_CHANGED").in_phase("tool"));
+            }
         }
         let name = string(call, "name")?;
         let binding = self
@@ -632,6 +789,14 @@ impl<'a> AgentRuntime<'a> {
             .and_then(Value::as_u64)
             .unwrap_or(u64::MAX);
         let requested_timeout = u64_field(call, "timeout_ms")?;
+        if requested_timeout > u64_field(generated, "timeout_ms")? {
+            return Err(ControlError::new("TOOL_CALL_TIMEOUT_INCREASED").in_phase("tool"));
+        }
+        if requested_timeout == 0 || configured_timeout == 0 {
+            return Err(ControlError::new("INVALID_TOOL_TIMEOUT")
+                .in_phase("tool")
+                .with_operation(tool_call_id));
+        }
         let remaining_timeout_ms = self
             .budget
             .remaining_interaction_ms(self.clock)
@@ -646,10 +811,17 @@ impl<'a> AgentRuntime<'a> {
                     .max(1)
             ),
         );
-        let effective_call = Value::Object(effective_call);
+        let mut effective_call = Value::Object(effective_call);
+        // Validation is also a cross-process operation: it must use the Worker
+        // deadline, not an unbounded timeout requested by the Agent.
+        self.tool_host.validate_call(binding, &effective_call)?;
+        let remaining_after_validation = self.budget.remaining_interaction_ms(self.clock)?;
+        effective_call["timeout_ms"] =
+            json!(u64_field(&effective_call, "timeout_ms")?.min(remaining_after_validation));
         self.budget
             .begin_tool(self.clock)
             .map_err(|error| error.in_phase("tool").with_operation(tool_call_id.clone()))?;
+        self.trajectory.persist_usage(&self.budget.usage())?;
         self.tool_call_ids.insert(tool_call_id.clone());
         self.trajectory
             .record(
@@ -662,6 +834,10 @@ impl<'a> AgentRuntime<'a> {
                     .in_phase("persist")
                     .with_operation(tool_call_id.clone())
             })?;
+        let trace_was_complete = self.trajectory.complete;
+        // Once execution starts, an invalid/missing reply leaves an uncertain
+        // operation. A synthetic error record cannot make that trace complete.
+        self.trajectory.complete = false;
         let result = match self.tool_host.call_tool(binding, &effective_call) {
             Ok(result) => result,
             Err(failure) => {
@@ -707,86 +883,84 @@ impl<'a> AgentRuntime<'a> {
                 })?;
             return Err(failure);
         }
+        if result["status"] == "ok" {
+            self.current_observation = result["observation"].clone();
+        }
         self.trajectory
             .record("tool_result", result.clone(), self.clock.unix_time_ms())
             .map_err(|error| error.in_phase("persist").with_operation(tool_call_id))?;
+        self.trajectory.complete = trace_was_complete;
         self.check_active()?;
         Ok(result)
     }
 
-    pub fn step(&mut self, action: &Value) -> Result<Value> {
-        self.check_active()?;
-        self.schema
-            .validate_shape("TypedConfig", action)
-            .map_err(|error| error.in_phase("environment"))?;
-        let remaining_timeout_ms = self
-            .budget
-            .remaining_interaction_ms(self.clock)
-            .map_err(|error| error.in_phase("environment"))?;
-        self.budget
-            .begin_environment_step(self.clock)
-            .map_err(|error| error.in_phase("environment"))?;
-        let index = self.next_environment_step_index;
-        let operation_id = index.to_string();
-        self.next_environment_step_index = self
-            .next_environment_step_index
-            .checked_add(1)
-            .ok_or_else(|| {
-                ControlError::new("ENVIRONMENT_STEP_INDEX_OVERFLOW")
-                    .in_phase("environment")
-                    .with_operation(operation_id.clone())
-            })?;
-        let transition = self
-            .environment_host
-            .step(action, remaining_timeout_ms)
-            .map_err(|error| {
-                error
-                    .in_phase("environment")
-                    .with_operation(operation_id.clone())
-            })?;
-        self.schema
-            .validate_shape("Transition", &transition)
-            .map_err(|error| {
-                error
-                    .in_phase("environment")
-                    .with_operation(operation_id.clone())
-            })?;
-        let observation_before = self.current_observation.clone();
-        let event = json!({
-            "environment_step_index": index,
-            "observation_before": observation_before,
-            "action": action,
-            "transition": transition,
-        });
-        self.schema
-            .validate_shape("EnvironmentTransition", &event)
-            .map_err(|error| {
-                error
-                    .in_phase("environment")
-                    .with_operation(operation_id.clone())
-            })?;
-        self.trajectory
-            .record(
-                "environment_transition",
-                event.clone(),
-                self.clock.unix_time_ms(),
-            )
-            .map_err(|error| {
-                error
-                    .in_phase("persist")
-                    .with_operation(operation_id.clone())
-            })?;
-        self.current_observation = transition.get("observation").cloned().ok_or_else(|| {
-            ControlError::new("TRANSITION_OBSERVATION_REQUIRED")
-                .in_phase("environment")
-                .with_operation(operation_id)
-        })?;
-        self.check_active()?;
-        Ok(transition.clone())
-    }
-
     pub fn usage(&self) -> Usage {
         self.budget.usage()
+    }
+
+    pub fn seed(&self) -> u64 {
+        self.seed
+    }
+
+    /// IPC wait loops must observe cancellation even when the Agent is idle.
+    pub fn check_rpc_active(&self) -> Result<()> {
+        self.check_active()?;
+        self.budget.remaining_interaction_ms(self.clock)?;
+        Ok(())
+    }
+
+    /// Current reset/step result; the SDK exposes the same observation.
+    pub fn observation(&self) -> &Value {
+        &self.current_observation
+    }
+
+    fn record_budget_denial(&mut self, result: Result<Value>) -> Result<Value> {
+        if let Err(error) = &result
+            && matches!(
+                error.code.as_str(),
+                "GENERATION_LIMIT"
+                    | "OUTPUT_TOKEN_LIMIT"
+                    | "TOOL_CALL_LIMIT"
+                    | "FINALIZE_RESERVE_REACHED"
+            )
+        {
+            self.budget_denied = true;
+        }
+        result
+    }
+
+    /// Derived from Worker-observed facts, never supplied by Agent.
+    pub fn termination_reason(&self) -> &'static str {
+        if self.current_observation["terminated"] == true {
+            "environment_terminal"
+        } else if self.current_observation["episode_truncated"] == true {
+            "environment_truncated"
+        } else if self.budget_denied
+            || self.last_generation_limited
+            || self.budget.remaining_interaction_ms(self.clock).is_err()
+        {
+            "budget_exhausted"
+        } else {
+            "final_answer"
+        }
+    }
+
+    fn check_interaction_open(&self) -> Result<()> {
+        self.check_active()?;
+        if self
+            .current_observation
+            .get("terminated")
+            .and_then(Value::as_bool)
+            == Some(true)
+            || self
+                .current_observation
+                .get("episode_truncated")
+                .and_then(Value::as_bool)
+                == Some(true)
+        {
+            return Err(ControlError::new("ENVIRONMENT_ALREADY_FINISHED").in_phase("environment"));
+        }
+        Ok(())
     }
 
     fn check_active(&self) -> Result<()> {
@@ -795,6 +969,33 @@ impl<'a> AgentRuntime<'a> {
         }
         Ok(())
     }
+}
+
+/// The canonical model-input conversion is shared by every Agent. Observations
+/// keep their typed parts; GenerationEvent.messages records this actual text view.
+fn prepare_model_messages(messages: &Value, schema: &ContractSchema) -> Result<Vec<Value>> {
+    let mut messages = messages
+        .as_array()
+        .ok_or_else(|| ControlError::new("MESSAGES_MUST_BE_ARRAY"))?
+        .clone();
+    for message in &mut messages {
+        schema.validate_shape("Message", message)?;
+        let content = message
+            .get_mut("content")
+            .and_then(Value::as_array_mut)
+            .ok_or_else(|| ControlError::new("INVALID_MESSAGE_CONTENT"))?;
+        for part in content {
+            schema.validate_shape("ContentPart", part)?;
+            if part["kind"] == "structured" {
+                // Package schema validation happens at the managed host/RPC edge.
+                // No guessing that a text response is a typed model on the way back.
+                let text = serde_json::to_string(&part["structured"]["data"])
+                    .map_err(|_| ControlError::new("STRUCTURED_CONTENT_SERIALIZATION_FAILED"))?;
+                *part = json!({"kind": "text", "text": text});
+            }
+        }
+    }
+    Ok(messages)
 }
 
 fn failed_tool_result(call: &Value, failure: &ControlError) -> Value {
@@ -808,7 +1009,7 @@ fn failed_tool_result(call: &Value, failure: &ControlError) -> Value {
     json!({
         "tool_call_id": call["tool_call_id"],
         "status": status,
-        "content": [],
+        "observation": {"content": [], "terminated": false, "episode_truncated": false},
         "output_truncated": false,
         "error": {
             "code": failure.code,
@@ -884,7 +1085,7 @@ mod trajectory_segment_tests {
             writer.record("unknown", json!({}), 1).unwrap_err().code,
             "UNKNOWN_TRAJECTORY_EVENT_KIND"
         );
-        let mut artifacts = crate::ports::MemoryArtifactStore::default();
+        let mut artifacts = crate::ports::MemoryFileStore::default();
         let reference = writer.seal(2, &mut artifacts).unwrap();
         let manifest: Value = serde_json::from_slice(&artifacts.read(&reference).unwrap()).unwrap();
         assert_eq!(manifest["trajectory_status"], "final_partial");

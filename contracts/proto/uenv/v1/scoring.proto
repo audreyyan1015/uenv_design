@@ -1,0 +1,55 @@
+syntax = "proto3";
+package uenv.v1;
+import "google/protobuf/struct.proto";
+import "uenv/v1/annotations.proto";
+import "uenv/v1/common.proto";
+import "uenv/v1/interaction.proto";
+import "uenv/v1/task.proto";
+
+message ScoreInput {
+  option (message_rule) = "{\"description\":\"Worker -> Python Scorer；只在交互结束并固定材料后创建，不能发送到 Agent\",\"additionalProperties\":false}";
+  optional TaskSpec task = 1 [json_name = "task", (required) = true];
+  repeated ContentPart final_answer = 2 [json_name = "final_answer", (required) = true, (field_rule) = "{\"description\":\"Agent.run 显式返回的最终提交；文本、补丁文本、文件引用复用 ContentPart；可为空表示仅按环境状态评分，不自动提取最后一次模型响应或工作区修改\"}"];
+  optional ArtifactRef trajectory_ref = 3 [json_name = "trajectory_ref", (required) = true];
+  optional TypedConfig state = 4 [json_name = "state", (field_rule) = "{\"description\":\"Environment.state_snapshot 提供的评分状态；只交给 Scorer，不进入公开结果\"}"];
+  optional TypedConfig private_data = 5 [json_name = "private_data"];
+}
+
+message Metric {
+  option (message_rule) = "{\"description\":\"一条 episode 的单个具名指标\",\"additionalProperties\":false}";
+  optional string name = 1 [json_name = "name", (required) = true, (field_rule) = "{\"description\":\"如 accuracy/resolved/tests_passed\"}"];
+  optional double value = 2 [json_name = "value", (required) = true, (field_rule) = "{\"description\":\"有限数，拒绝 NaN/Infinity\"}"];
+  optional string unit = 3 [json_name = "unit", (required) = true, (field_rule) = "{\"description\":\"如 ratio/count\"}"];
+  optional string direction = 4 [json_name = "direction", (required) = true, (field_rule) = "{\"description\":\"优化方向\",\"enum\":[\"higher\",\"lower\",\"none\"]}"];
+}
+
+message ScoreResult {
+  option (message_rule) = "{\"description\":\"统一评分结果；Python Scorer 返回同名 SDK 类的业务字段，Rust Worker 补全系统字段后才满足本传输 schema\",\"additionalProperties\":false,\"allOf\":[{\"if\":{\"properties\":{\"status\":{\"const\":\"error\"}}},\"then\":{\"properties\":{\"success\":{\"type\":\"null\"},\"reward\":{\"type\":\"null\"}},\"required\":[\"error\"],\"not\":{\"required\":[\"generation_rewards\"]}}},{\"if\":{\"properties\":{\"status\":{\"const\":\"ok\"}}},\"then\":{\"properties\":{\"reward\":{\"type\":\"number\"}},\"not\":{\"required\":[\"error\"]}}}]}";
+  optional string status = 1 [json_name = "status", (required) = true, (field_rule) = "{\"description\":\"评分是否成功完成；系统维护，评分器不得填写；SDK 构造时为 None，最终传输按必填/可选规则校验\",\"enum\":[\"ok\",\"error\"]}"];
+  optional google.protobuf.Value success = 2 [json_name = "success", (required) = true, (field_rule) = "{\"type\":[\"boolean\",\"null\"],\"description\":\"任务是否成功；无法确定时为 null\"}"];
+  repeated Metric metrics = 3 [json_name = "metrics", (required) = true, (field_rule) = "{\"description\":\"命名指标列表，名称唯一\"}"];
+  optional google.protobuf.Value reward = 4 [json_name = "reward", (required) = true, (field_rule) = "{\"type\":[\"number\",\"null\"],\"description\":\"本条 episode 的唯一奖励；评分成功时必须为有限数，评测展示与后训练复用该值\"}"];
+  repeated google.protobuf.Struct generation_rewards = 5 [json_name = "generation_rewards", (field_rule) = "{\"description\":\"可选逐次生成评分；Scorer 填写，Worker 验证归属，训练端按原 ID 消费\",\"items\":{\"properties\":{\"generation_id\":{\"type\":\"string\",\"description\":\"评分前轨迹中本 attempt 已记录的模型生成 ID\"},\"reward\":{\"type\":\"number\",\"description\":\"该次生成的有限分数；缺项不补零，不与整体 reward 自动合并\"}},\"required\":[\"generation_id\",\"reward\"],\"additionalProperties\":false}}"];
+  repeated ArtifactRef evidence = 6 [json_name = "evidence", (required) = true, (field_rule) = "{\"description\":\"评分证据\"}"];
+  optional ResolvedComponent scorer = 7 [json_name = "scorer", (required) = true, (field_rule) = "{\"description\":\"；系统维护，评分器不得填写；SDK 构造时为 None，最终传输按必填/可选规则校验\"}"];
+  optional ErrorRecord error = 8 [json_name = "error", (field_rule) = "{\"description\":\"；系统维护，评分器不得填写；SDK 构造时为 None，最终传输按必填/可选规则校验\"}"];
+}
+
+message HarnessRequest {
+  option (message_rule) = "{\"description\":\"Scorer -> Worker 提供的 harness 执行能力\",\"additionalProperties\":false}";
+  repeated ContentPart final_answer = 1 [json_name = "final_answer", (required) = true, (field_rule) = "{\"description\":\"Agent.run 显式返回的最终提交；文本、补丁文本、文件引用复用 ContentPart；可为空表示仅按环境状态评分，不自动提取最后一次模型响应或工作区修改\"}"];
+  optional TypedConfig state = 2 [json_name = "state", (field_rule) = "{\"description\":\"Environment.state_snapshot 提供的评分状态；只交给 Scorer，不进入公开结果\"}"];
+  optional TypedConfig private_data = 3 [json_name = "private_data", (required) = true, (field_rule) = "{\"description\":\"原样传入；唯一评测配置在 data.evaluation_plan，不新增顶层副本\"}"];
+  optional int64 remaining_timeout_ms = 4 [json_name = "remaining_timeout_ms", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"剩余预算\"}"];
+}
+
+message HarnessResult {
+  option (message_rule) = "{\"description\":\"harness 结果，候选失败和 harness 错误不同\",\"additionalProperties\":false,\"allOf\":[{\"if\":{\"properties\":{\"status\":{\"const\":\"ok\"}}},\"then\":{\"properties\":{\"success\":{\"type\":\"boolean\"}},\"not\":{\"required\":[\"error\"]}}},{\"if\":{\"properties\":{\"status\":{\"const\":\"error\"}}},\"then\":{\"properties\":{\"success\":{\"type\":\"null\"}},\"required\":[\"error\"]}}]}";
+  optional string status = 1 [json_name = "status", (required) = true, (field_rule) = "{\"description\":\"评测程序是否正常完成\",\"enum\":[\"ok\",\"error\"]}"];
+  optional google.protobuf.Value success = 2 [json_name = "success", (required) = true, (field_rule) = "{\"type\":[\"boolean\",\"null\"],\"description\":\"正常完成时必须为布尔值\"}"];
+  optional int64 tests_run = 3 [json_name = "tests_run", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"实际测试数\"}"];
+  optional int64 tests_passed = 4 [json_name = "tests_passed", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"通过数量\"}"];
+  optional ArtifactRef report_ref = 5 [json_name = "report_ref", (required) = true];
+  repeated Metric metrics = 6 [json_name = "metrics", (field_rule) = "{\"description\":\"可选的详细指标\"}"];
+  optional ErrorRecord error = 7 [json_name = "error"];
+}

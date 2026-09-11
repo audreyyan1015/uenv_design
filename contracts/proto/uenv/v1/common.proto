@@ -1,0 +1,136 @@
+syntax = "proto3";
+package uenv.v1;
+import "google/protobuf/struct.proto";
+import "uenv/v1/annotations.proto";
+
+message ComponentRef {
+  option (message_rule) = "{\"description\":\"作者指定的组件坐标；提交时解析为 ResolvedComponent\",\"additionalProperties\":false}";
+  optional string id = 1 [json_name = "id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string version = 2 [json_name = "version", (required) = true, (field_rule) = "{\"description\":\"精确版本或提交时解析的版本约束\"}"];
+  optional string digest = 3 [json_name = "digest", (field_rule) = "{\"description\":\"内容 SHA-256；必须对应实际字节\",\"pattern\":\"^sha256:[0-9a-f]{64}$\"}"];
+}
+
+message ResolvedComponent {
+  option (message_rule) = "{\"description\":\"不可变组件引用；执行期间不得重新解析 latest\",\"additionalProperties\":false}";
+  optional string id = 1 [json_name = "id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string version = 2 [json_name = "version", (required) = true, (field_rule) = "{\"description\":\"已解析精确版本\"}"];
+  optional string digest = 3 [json_name = "digest", (required) = true, (field_rule) = "{\"description\":\"内容 SHA-256；必须对应实际字节\",\"pattern\":\"^sha256:[0-9a-f]{64}$\"}"];
+}
+
+message ArtifactRef {
+  option (message_rule) = "{\"description\":\"不可变产物引用；URI 不得含凭据\",\"additionalProperties\":false}";
+  optional string uri = 1 [json_name = "uri", (required) = true, (field_rule) = "{\"description\":\"支持的存储 URI；访问凭据由身份系统提供\"}"];
+  optional string digest = 2 [json_name = "digest", (required) = true, (field_rule) = "{\"description\":\"内容 SHA-256；必须对应实际字节\",\"pattern\":\"^sha256:[0-9a-f]{64}$\"}"];
+  optional int64 size_bytes = 3 [json_name = "size_bytes", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"字节数\"}"];
+  optional string media_type = 4 [json_name = "media_type", (required) = true, (field_rule) = "{\"description\":\"MIME 类型\"}"];
+}
+
+message ErrorRecord {
+  option (message_rule) = "{\"description\":\"统一结构化错误；任务答错不属于基础设施错误\",\"additionalProperties\":false}";
+  optional string code = 1 [json_name = "code", (required) = true, (field_rule) = "{\"description\":\"稳定大写错误码，如 SCORER_FAILED\"}"];
+  optional string phase = 2 [json_name = "phase", (required) = true, (field_rule) = "{\"description\":\"发生阶段\",\"enum\":[\"validation\",\"queue\",\"prepare\",\"agent\",\"model\",\"tool\",\"environment\",\"score\",\"persist\",\"cleanup\"]}"];
+  optional string message = 3 [json_name = "message", (required) = true, (field_rule) = "{\"description\":\"可读说明，不放密钥或完整私有评分输入\"}"];
+  optional bool retryable = 4 [json_name = "retryable", (required) = true, (field_rule) = "{\"description\":\"由错误分类决定的重试资格；不是立即重试命令\"}"];
+  optional string operation_id = 5 [json_name = "operation_id", (field_rule) = "{\"description\":\"已经接纳的外部操作身份；按 phase 引用同一次操作已有的 generation_id、tool_call_id，不另造第二套身份\",\"minLength\":1,\"maxLength\":256}"];
+  optional ArtifactRef diagnostic_ref = 6 [json_name = "diagnostic_ref", (field_rule) = "{\"description\":\"完整诊断材料引用\"}"];
+}
+
+message EmptyConfig {
+  option (message_rule) = "{\"description\":\"无额外参数\",\"additionalProperties\":false}";
+  option (extension_schema) = true;
+}
+
+message PlainAgentConfig {
+  option (message_rule) = "{\"description\":\"轻量智能体配置\",\"additionalProperties\":false}";
+  option (extension_schema) = true;
+  optional string history_policy = 1 [json_name = "history_policy", (required) = true, (field_rule) = "{\"description\":\"full 保留完整历史；last_generation 保留系统提示、初始任务和最近一次完整模型及工具或环境交互\",\"enum\":[\"full\",\"last_generation\"],\"default\":\"full\"}"];
+  optional string system_prompt = 2 [json_name = "system_prompt", (required) = true, (field_rule) = "{\"description\":\"智能体系统提示词；空表示不额外添加\",\"default\":\"\"}"];
+}
+
+message OpenHandsAgentConfig {
+  option (message_rule) = "{\"description\":\"OpenHands adapter 的明确可调参数\",\"additionalProperties\":false}";
+  option (extension_schema) = true;
+  optional string system_prompt = 1 [json_name = "system_prompt", (required) = true, (field_rule) = "{\"description\":\"用户附加的系统提示\",\"default\":\"\"}"];
+}
+
+message ProcessBackendConfig {
+  option (message_rule) = "{\"description\":\"进程任务后端；无容器镜像\",\"additionalProperties\":false}";
+  option (extension_schema) = true;
+  optional string runtime_profile = 1 [json_name = "runtime_profile", (required) = true, (field_rule) = "{\"description\":\"管理员预注册的本机依赖配置名；不得改变平台安全底线或计划中的 internet_access\"}"];
+}
+
+message ContainerBackendConfig {
+  option (message_rule) = "{\"description\":\"Docker/Podman 无额外用户参数；引擎连接属于 Worker 部署配置，镜像选择位于 runtime.image\",\"additionalProperties\":false}";
+  option (extension_schema) = true;
+}
+
+message ToolConfig {
+  option (message_rule) = "{\"description\":\"公共命令/文件工具参数\",\"additionalProperties\":false}";
+  option (extension_schema) = true;
+  optional int64 timeout_ms = 1 [json_name = "timeout_ms", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"工具执行预算，受 episode 总 deadline 限制\",\"default\":30000}"];
+  optional int64 max_preview_bytes = 2 [json_name = "max_preview_bytes", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"返回消息预览长度；原始输出另存 artifact\",\"default\":8192}"];
+}
+
+message TerminalArgs {
+  option (message_rule) = "{\"description\":\"终端工具参数\",\"additionalProperties\":false}";
+  option (extension_schema) = true;
+  repeated string argv = 1 [json_name = "argv", (required) = true, (field_rule) = "{\"description\":\"显式 argv；需要 shell 时明确给出 shell -c 参数\",\"items\":{\"description\":\"单个参数\"}}"];
+  optional string cwd = 2 [json_name = "cwd", (required) = true, (field_rule) = "{\"description\":\"沙箱内目录\"}"];
+}
+
+message ReadFileArgs {
+  option (message_rule) = "{\"description\":\"读取工具参数\",\"additionalProperties\":false}";
+  option (extension_schema) = true;
+  optional string path = 1 [json_name = "path", (required) = true, (field_rule) = "{\"description\":\"工作区内路径\"}"];
+}
+
+message WriteFileArgs {
+  option (message_rule) = "{\"description\":\"写入工具参数\",\"additionalProperties\":false}";
+  option (extension_schema) = true;
+  optional string path = 1 [json_name = "path", (required) = true, (field_rule) = "{\"description\":\"工作区内路径\"}"];
+  optional string content = 2 [json_name = "content", (required) = true, (field_rule) = "{\"description\":\"完整写入内容\"}"];
+}
+
+message EvaluationPlan {
+  option (message_rule) = "{\"description\":\"包拥有的评测执行计划；不能给 Agent 读取\",\"additionalProperties\":false}";
+  option (extension_schema) = true;
+  optional ResolvedComponent harness = 1 [json_name = "harness", (required) = true, (field_rule) = "{\"description\":\"唯一 harness 选择，固定精确版本和 digest\"}"];
+  repeated google.protobuf.Value setup_argv = 2 [json_name = "setup_argv", (required) = true, (field_rule) = "{\"description\":\"准备步骤\",\"items\":{\"type\":\"array\",\"items\":{\"type\":\"string\",\"description\":\"参数\"},\"description\":\"一次命令\"}}"];
+  repeated string test_argv = 3 [json_name = "test_argv", (required) = true, (field_rule) = "{\"description\":\"测试入口命令\",\"items\":{\"description\":\"参数\"}}"];
+  optional string cwd = 4 [json_name = "cwd", (required) = true, (field_rule) = "{\"description\":\"评分沙箱目录\"}"];
+  optional int64 timeout_ms = 5 [json_name = "timeout_ms", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"评测预算\"}"];
+}
+
+message TypedConfig {
+  option (message_rule) = "{\"description\":\"扩展信封；必须由 SchemaRegistry 绑定 schema_ref 对应的已注册 schema 后校验 data，禁止仅做信封校验\",\"additionalProperties\":false}";
+  optional string schema_ref = 1 [json_name = "schema_ref", (required) = true, (field_rule) = "{\"description\":\"精确 schema URI，未知 URI 必须拒绝\",\"minLength\":1}"];
+  optional google.protobuf.Value data = 2 [json_name = "data", (required) = true, (field_rule) = "{\"not\":{},\"description\":\"未绑定前禁止执行验证通过；SchemaRegistry 按已注册版本化 schema 替换为 oneOf/$ref\"}"];
+}
+
+message Lease {
+  option (message_rule) = "{\"description\":\"Server 颁发，Worker 核验；不能由用户任务参数携带\",\"additionalProperties\":false}";
+  optional string lease_id = 1 [json_name = "lease_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional int64 epoch = 2 [json_name = "epoch", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"服务实例任期\"}"];
+  optional int64 expires_at_ms = 3 [json_name = "expires_at_ms", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟\"}"];
+  optional string token = 4 [json_name = "token", (required) = true, (field_rule) = "{\"description\":\"租约授权值；不得写入用户轨迹\"}"];
+}
+
+message SessionRef {
+  option (message_rule) = "{\"description\":\"资源 session 身份；不等于 task_id 或 sample_id\",\"additionalProperties\":false}";
+  optional string session_id = 1 [json_name = "session_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional ResolvedComponent backend = 2 [json_name = "backend", (required) = true];
+}
+
+message Usage {
+  option (message_rule) = "{\"description\":\"本 episode 截至当前 attempt 的累计用量；不同操作独立计数，基础设施重试不清零\",\"additionalProperties\":false}";
+  optional int64 generation_count = 1 [json_name = "generation_count", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"模型生成调用次数\"}"];
+  optional int64 tool_call_count = 2 [json_name = "tool_call_count", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"工具执行次数\"}"];
+  optional int64 output_token_count = 3 [json_name = "output_token_count", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"已确认的实际生成 token 数；轨迹不完整时只表示已确认部分，不能推断缺失调用未消耗 token\"}"];
+}
+
+message Ack {
+  option (message_rule) = "{\"description\":\"提交/上报/取消的确认\",\"additionalProperties\":false}";
+  optional bool accepted = 1 [json_name = "accepted", (required) = true, (field_rule) = "{\"description\":\"是否接受\"}"];
+  optional string code = 2 [json_name = "code", (required) = true, (field_rule) = "{\"description\":\"OK/STALE_ATTEMPT/CONFLICT 等稳定码\"}"];
+  optional string message = 3 [json_name = "message", (required) = true, (field_rule) = "{\"description\":\"说明\"}"];
+}

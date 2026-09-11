@@ -48,19 +48,23 @@
     "finalize_reserve_ms": 120000,
     "max_generations": 1,
     "max_tool_calls": 0,
-    "max_environment_steps": 0,
     "max_total_output_tokens": 32768
   },
   "environment": {
-    "implementation": {
-      "id": "datasets/pubmedqa",
-      "version": "1.0.0",
-      "digest": "sha256:b04283e9173b3a39b1aba2aaa259f32ccc0596afc006039f1002f70c0cf5aad9"
-    },
+    "schema_ref": "uenv://schemas/vnext/EmptyConfig",
+    "data": {}
+  },
+  "scoring": {
+    "enabled": true,
     "config": {
       "schema_ref": "uenv://schemas/vnext/EmptyConfig",
       "data": {}
     }
+  },
+  "dataset_package": {
+    "id": "datasets/pubmedqa",
+    "version": "1.0.0",
+    "digest": "sha256:b04283e9173b3a39b1aba2aaa259f32ccc0596afc006039f1002f70c0cf5aad9"
   },
   "agent": {
     "implementation": {
@@ -74,17 +78,6 @@
         "history_policy": "full",
         "system_prompt": ""
       }
-    }
-  },
-  "scorer": {
-    "implementation": {
-      "id": "datasets/pubmedqa",
-      "version": "1.0.0",
-      "digest": "sha256:b04283e9173b3a39b1aba2aaa259f32ccc0596afc006039f1002f70c0cf5aad9"
-    },
-    "config": {
-      "schema_ref": "uenv://schemas/vnext/EmptyConfig",
-      "data": {}
     }
   },
   "backend": {
@@ -111,5 +104,5 @@
   "required_capabilities": [],
   "internet_access": false,
   "deadline_at_ms": 1800000300000,
-  "plan_digest": "sha256:fb6391382ae8d2c882365574b2d80cf7d9cec6db589729ab01f79baa82691824"
+  "plan_digest": "sha256:319261663f29c12d628fd029f5cc76186685db0444d0c2979d48066f3b3d63f7"
 }

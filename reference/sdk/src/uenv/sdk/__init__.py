@@ -5,6 +5,8 @@ from copy import deepcopy
 from dataclasses import dataclass, field, fields
 from typing import Callable
 import time
+import json
+import hashlib
 from .modeling import (
     ArtifactRef,
     ContentPart,
@@ -17,6 +19,7 @@ from .modeling import (
     model_to_envelope,
 )
 from .schema_registry import SchemaRegistry
+from .session import Session
 
 
 def to_wire(value):
@@ -24,7 +27,7 @@ def to_wire(value):
         return model_to_envelope(value)
     if hasattr(value, '__dataclass_fields__'):
         return {f.name:to_wire(getattr(value,f.name)) for f in fields(value)
-                if getattr(value,f.name) is not None or f.name in {'success','reward','environment_reward'}}
+                if getattr(value,f.name) is not None or f.name in {'success','reward'}}
     if isinstance(value, dict):
         return {k:to_wire(v) for k,v in value.items()}
     if isinstance(value, (tuple,list)):
@@ -34,6 +37,13 @@ def to_wire(value):
 
 def text_part(text):
     return {'kind':'text','text':text}
+
+
+def structured_part(value: UEnvModel) -> dict:
+    """One public structured content item; authors do not write transport envelopes."""
+    if not isinstance(value, UEnvModel):
+        raise TypeError('Structured content requires a registered UEnvModel')
+    return {'kind': 'structured', 'structured': model_to_envelope(value)}
 
 
 @dataclass(frozen=True)
@@ -74,29 +84,8 @@ class DatasetAdapter(ABC):
 @dataclass(frozen=True)
 class Observation:
     content: list[dict] = field(default_factory=list)
-    data: UEnvModel | None = None
-
-
-@dataclass(frozen=True)
-class Transition:
-    observation: Observation
     terminated: bool = False
     episode_truncated: bool = False
-    environment_reward: float | None = None
-
-
-@dataclass(frozen=True)
-class Outcome:
-    final_answer: list[dict] = field(default_factory=list)
-    artifacts: list[dict] = field(default_factory=list)
-    termination_reason: str = 'final_answer'
-    state: UEnvModel | None = None
-
-    @property
-    def text(self):
-        if any(part['kind'] != 'text' for part in self.final_answer):
-            raise ValueError('Text-only scorer cannot discard non-text answer parts')
-        return ''.join(part['text'] for part in self.final_answer)
 
 
 @dataclass(frozen=True)
@@ -106,7 +95,7 @@ class EnvironmentContext:
     cancelled: Callable[[], bool]
     deadline: float
     seed: int
-    session: dict
+    session: Session
 
     def check(self):
         if self.cancelled():
@@ -125,20 +114,8 @@ class Environment(ABC):
     def reset(self, task: TaskSpec, context: EnvironmentContext) -> Observation:
         """TaskSpec contains only public input and identity; no scoring material references."""
 
-    def step(self, action: UEnvModel, context: EnvironmentContext) -> Transition:
-        raise NotImplementedError('This environment declares no action interface')
-
     def state_snapshot(self, context: EnvironmentContext) -> UEnvModel | None:
         return None
-
-    def snapshot(self, context: EnvironmentContext) -> Outcome:
-        return Outcome(termination_reason='in_progress', state=deepcopy(self.state_snapshot(context)))
-
-    def finalize(self, outcome: Outcome, context: EnvironmentContext) -> Outcome:
-        if outcome.state is not None or outcome.termination_reason == 'in_progress':
-            raise ValueError('Agent submission must finish and cannot provide environment state')
-        return Outcome(deepcopy(outcome.final_answer), deepcopy(outcome.artifacts),
-                             outcome.termination_reason, deepcopy(self.state_snapshot(context)))
 
     def close(self, context: EnvironmentContext):
         """Optional plugin cleanup; Worker still owns underlying resources."""
@@ -151,6 +128,10 @@ class AgentRuntimeError(RuntimeError):
         self.error = deepcopy(error)
         super().__init__(error['code'])
 
+    @property
+    def code(self):
+        return self.error['code']
+
 
 class AgentContext(ABC):
     """Worker-provided capability view; it never owns scheduling or budgets."""
@@ -159,18 +140,16 @@ class AgentContext(ABC):
     observation: Observation
     tools: tuple[dict, ...]
     seed: int
+    # observation is the current reset/step result, including end flags.
 
     @abstractmethod
     async def generate(self, messages: list[dict]) -> dict:
         """Request one generation through Rust; denied operations raise AgentRuntimeError."""
 
     @abstractmethod
-    async def call_tool(self, call: dict) -> dict:
-        """Call one item from tools through the Rust AgentRuntime gate."""
+    async def call_tool(self, call: dict) -> Observation:
+        """Return public feedback; transport envelopes stay inside the SDK."""
 
-    @abstractmethod
-    async def step(self, action: UEnvModel) -> Transition:
-        """Apply one environment action through the Rust AgentRuntime gate."""
 
 
 class AgentRunner(ABC):
@@ -180,7 +159,7 @@ class AgentRunner(ABC):
         self.config = deepcopy(config)
 
     @abstractmethod
-    async def run(self, context: AgentContext) -> Outcome:
+    async def run(self, context: AgentContext) -> list[dict]:
         """Own the interaction loop; receive only visible capabilities."""
 
 
@@ -198,8 +177,9 @@ class ToolExecutor(ABC):
 @dataclass(frozen=True)
 class ScoreInput:
     task: TaskSpec
-    outcome: Outcome
+    final_answer: list[dict]
     trajectory_ref: dict
+    state: UEnvModel | None = None
     private_data: UEnvModel | None = None
 
 
@@ -209,6 +189,7 @@ class ScoreResult:
     metrics: list[dict] = field(default_factory=list)
     reward: float | None = None
     evidence: list[dict] = field(default_factory=list)
+    generation_rewards: list[dict] | None = None
 
     # Only the Rust Worker fills these fields. Scorer-returned values are rejected.
     status: str | None = None
@@ -245,6 +226,39 @@ class ScoringContext:
         return max(1, int((self.deadline - time.monotonic()) * 1000))
 
 
+def read_scoring_trajectory(request: ScoreInput, context: ScoringContext) -> list[dict]:
+    """Read a verified, complete pre-score snapshot through the scoped reader."""
+    if context.read_artifact is None:
+        raise RuntimeError('Worker-bound trajectory reader is unavailable')
+    def read(reference):
+        context.check()
+        content = context.read_artifact(reference)
+        if (len(content) != reference['size_bytes']
+                or 'sha256:' + hashlib.sha256(content).hexdigest() != reference['digest']):
+            raise ValueError('Trajectory artifact integrity mismatch')
+        return content
+    manifest = json.loads(read(request.trajectory_ref))
+    context.registry.validate('TrajectoryManifest', manifest)
+    if manifest['trajectory_status'] != 'scoring_checkpoint' or manifest['task_id'] != request.task.task_id:
+        raise ValueError('Expected this task scoring checkpoint')
+    events = []
+    for segment in manifest['event_segments']:
+        for line in read(segment).splitlines():
+            if not line:
+                raise ValueError('Empty trajectory record')
+            event = json.loads(line)
+            context.registry.validate('TrajectoryEvent', event)
+            if any(event[field] != manifest[field] for field in ('run_id', 'episode_id', 'attempt_id', 'task_id')):
+                raise ValueError('Trajectory identity mismatch')
+            if event['sequence'] != len(events):
+                raise ValueError('Incomplete scoring trajectory')
+            events.append(event)
+    if len(events) != manifest['event_count']:
+        raise ValueError('Trajectory event count mismatch')
+    context.check()
+    return events
+
+
 class Scorer(ABC):
     def __init__(self, config: dict):
         if not isinstance(config, dict):
@@ -260,7 +274,9 @@ def read_reference_text(request: ScoreInput) -> tuple[str, dict]:
     """Opt-in extraction for rules requiring text and private reference material."""
     if request.private_data is None:
         raise ValueError('This scoring rule requires reference material')
-    return request.outcome.text, request.private_data.model_dump()
+    if any(part['kind'] != 'text' for part in request.final_answer):
+        raise ValueError('Text-only scorer cannot discard non-text answer parts')
+    return ''.join(part['text'] for part in request.final_answer), request.private_data.model_dump()
 
 
 def evaluate_harness(request: ScoreInput, context: ScoringContext) -> ScoreResult:
@@ -275,8 +291,10 @@ def evaluate_harness(request: ScoreInput, context: ScoringContext) -> ScoreResul
     remaining_timeout_ms = min(evaluation_plan['timeout_ms'], context.remaining_timeout_ms())
     if remaining_timeout_ms <= 0:
         raise TimeoutError('HARNESS_TIMEOUT')
-    command = {'outcome':deepcopy(to_wire(request.outcome)),
+    command = {'final_answer':deepcopy(to_wire(request.final_answer)),
                'private_data':model_to_envelope(request.private_data), 'remaining_timeout_ms':remaining_timeout_ms}
+    if request.state is not None:
+        command['state'] = model_to_envelope(request.state)
     context.registry.validate('HarnessRequest', command)
     report = context.run_harness(command)
     context.registry.validate('HarnessResult',report)
@@ -288,3 +306,6 @@ def evaluate_harness(request: ScoreInput, context: ScoringContext) -> ScoreResul
     return ScoreResult(report['success'], deepcopy(report.get('metrics',
         [{'name':'resolved','value':reward,'unit':'ratio','direction':'higher'}])),
         reward=reward, evidence=[deepcopy(report['report_ref'])])
+
+# User-defined tools use the same authoring API in independent and dataset packages.
+from .tools import tool

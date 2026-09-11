@@ -3,6 +3,7 @@ from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
+from importlib.resources import files
 from jsonschema import Draft202012Validator, ValidationError
 from referencing import Registry, Resource
 
@@ -13,16 +14,18 @@ def canonical_bytes(value):
 
 class SchemaRegistry:
     def __init__(self, contract_path=None):
-        path = contract_path or Path(__file__).resolve().parents[5]/'contracts/uenv.schema.json'
-        self.core = json.loads(Path(path).read_text(encoding='utf-8'))
+        path = Path(contract_path) if contract_path else files('uenv.sdk').joinpath('resources/uenv.schema.json')
+        self.core = json.loads(path.read_text(encoding='utf-8'))
         self.extensions = {}
 
     @classmethod
     def bundled(cls):
         registry = cls()
-        design_root = Path(__file__).resolve().parents[5]
-        for path in sorted((design_root/'contracts/extensions').glob('*.schema.json')):
+        for path in files('uenv.sdk').joinpath('resources/extensions').iterdir():
             registry.register(json.loads(path.read_text(encoding='utf-8')))
+        # Repository examples are test fixtures. Installed packages register
+        # their verified schemas explicitly through register_artifact().
+        design_root = Path(__file__).resolve().parents[5]
         for path in sorted((design_root/'reference/generated/packages').glob('*/schemas/*.schema.json')):
             registry.register(json.loads(path.read_text(encoding='utf-8')))
         return registry

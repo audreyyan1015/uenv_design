@@ -1,4 +1,4 @@
-from uenv.sdk import Environment, Observation, text_part
+from uenv.sdk import Environment, Observation, structured_part, text_part
 
 
 class DscodebenchEnvironment(Environment):
@@ -7,4 +7,4 @@ class DscodebenchEnvironment(Environment):
     def reset(self, task, context) -> Observation:
         context.check()
         input_data = task.input
-        return Observation([text_part("Generate a Python solution.\n" + input_data.instruction)], input_data)
+        return Observation(content=[text_part("Generate a Python solution."), structured_part(input_data)])

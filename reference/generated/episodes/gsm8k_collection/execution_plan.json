@@ -39,19 +39,19 @@
     "finalize_reserve_ms": 120000,
     "max_generations": 1,
     "max_tool_calls": 0,
-    "max_environment_steps": 0,
     "max_total_output_tokens": 32768
   },
   "environment": {
-    "implementation": {
-      "id": "datasets/gsm8k",
-      "version": "1.0.0",
-      "digest": "sha256:93b6cc135f50a89e297cc7e03160f16ff709652dfc7137da3166159095d605ea"
-    },
-    "config": {
-      "schema_ref": "uenv://schemas/vnext/EmptyConfig",
-      "data": {}
-    }
+    "schema_ref": "uenv://schemas/vnext/EmptyConfig",
+    "data": {}
+  },
+  "scoring": {
+    "enabled": false
+  },
+  "dataset_package": {
+    "id": "datasets/gsm8k",
+    "version": "1.0.0",
+    "digest": "sha256:93b6cc135f50a89e297cc7e03160f16ff709652dfc7137da3166159095d605ea"
   },
   "agent": {
     "implementation": {
@@ -91,5 +91,5 @@
   "required_capabilities": [],
   "internet_access": false,
   "deadline_at_ms": 1800000300000,
-  "plan_digest": "sha256:4fd9155b02010ff86668298992ffe60ecca2458605b98e6ca4871f866600715c"
+  "plan_digest": "sha256:fe4eac77b76214141acc5cdcc69c2900a9236d94092da25c82def2a8988b1fd2"
 }

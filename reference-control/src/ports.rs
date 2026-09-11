@@ -48,7 +48,13 @@ impl Clock for SystemClock {
     }
 }
 
-pub trait ArtifactStore {
+/// Internal byte-storage port, not a user extension or a standalone service.
+/// Callers own authorization, package metadata, trajectory structure and
+/// retention policy. Storage operations keep the existing ArtifactRef wire type.
+pub trait FileStore {
+    fn spool_root(&self) -> Option<std::path::PathBuf> {
+        None
+    }
     fn put_bytes(&mut self, content: &[u8], media_type: &str) -> Result<Value>;
 
     fn put_json(&mut self, value: &Value) -> Result<Value> {
@@ -59,12 +65,13 @@ pub trait ArtifactStore {
     fn read(&self, reference: &Value) -> Result<Vec<u8>>;
 }
 
+/// In-memory implementation for reference validation, not persistent storage.
 #[derive(Default)]
-pub struct MemoryArtifactStore {
+pub struct MemoryFileStore {
     objects: BTreeMap<String, Vec<u8>>,
 }
 
-impl ArtifactStore for MemoryArtifactStore {
+impl FileStore for MemoryFileStore {
     fn put_bytes(&mut self, content: &[u8], media_type: &str) -> Result<Value> {
         let content_digest = digest_bytes(content);
         let uri = format!("memory://{content_digest}");
@@ -122,8 +129,11 @@ pub trait ToolHost {
         session: &Value,
         remaining_timeout_ms: u64,
     ) -> Result<Vec<Value>>;
+    /// Validate selected tool argument schema before Worker counts or executes it.
+    fn validate_call(&self, binding: &Value, call: &Value) -> Result<()>;
     fn call_tool(&mut self, binding: &Value, call: &Value) -> Result<Value>;
-    /// Revokes further tool calls before scoring starts.
+    /// Revokes admission and settles or cancels in-flight calls before backend freeze and scoring.
+    /// Stops tool-owned background writers; success means no later writes.
     fn freeze(&mut self, remaining_timeout_ms: u64) -> Result<()>;
     fn close(&mut self) -> Result<()>;
 }
@@ -140,13 +150,16 @@ pub trait ModelProvider {
 pub trait EnvironmentHost {
     fn prepare(
         &mut self,
+        dataset_package: &Value,
         environment: &Value,
         session: &Value,
         remaining_timeout_ms: u64,
     ) -> Result<()>;
     fn reset(&mut self, task: &Value, seed: u64, remaining_timeout_ms: u64) -> Result<Value>;
-    fn step(&mut self, action: &Value, remaining_timeout_ms: u64) -> Result<Value>;
-    fn finalize(&mut self, outcome: &Value, remaining_timeout_ms: u64) -> Result<Value>;
+    /// Private scoring state; the host validates the package's registered state model.
+    fn state_snapshot(&mut self, _remaining_timeout_ms: u64) -> Result<Option<Value>> {
+        Ok(None)
+    }
     fn close(&mut self) -> Result<()>;
 }
 
@@ -158,8 +171,10 @@ pub trait AgentHost {
         &mut self,
         agent: &Value,
         tools: &[Value],
+        model_id: &str,
         remaining_timeout_ms: u64,
     ) -> Result<Vec<Value>>;
+    /// Returns ContentPart[]: explicit final_answer, including an intentional empty list.
     fn run_agent(
         &mut self,
         task: &Value,
@@ -180,7 +195,8 @@ pub trait ScoringContext {
 pub trait ScorerHost {
     fn score(
         &mut self,
-        scorer: &Value,
+        dataset_package: &Value,
+        config: &Value,
         request: &Value,
         context: &mut dyn ScoringContext,
     ) -> Result<Value>;

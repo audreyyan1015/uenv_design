@@ -1,6 +1,8 @@
 # UEnv vNext 字段字典
 
-本文件由本地过渡生成器 scripts/build_contracts.py 生成。目标生产版本改由 contracts/proto/uenv/v1/*.proto 生成；本文件不是另一处可编辑协议，禁止手工编辑；修改生成器后重新生成。所有对象默认拒绝未知字段；表中的必填性针对完整传输对象；标注的默认值只由 Bridge 提交入口补齐，Server/Worker 校验不补值。run.yaml 展开后的完整 RunSpec 是唯一用户配置输入。
+本字典对应统一 step(tool_call) 参考契约；工具公开反馈统一在 ToolResult.observation 中。工具接口协商已删除：原生工具由 AgentManifest.provided_tools 导出，ResolvedToolBinding.native_agent 校验所属 Agent；SDK/MCP 接入方式由 Agent 实现决定。迁移范围见[工具接入与验收](../development/source_refactoring_plan.md#113-工具接入与验收)。
+
+本文件由 scripts/build_contracts.py 从 contracts/proto/uenv/v1/*.proto 生成；公共字段只修改 proto，然后重新生成 Rust/Python 类型、schema 和本字典，禁止手工编辑生成物。所有对象默认拒绝未知字段；表中的必填性针对完整传输对象；标注的默认值只由 Bridge 提交入口补齐，Server/Worker 校验不补值。run.yaml 展开后的完整 RunSpec 是唯一用户配置输入。
 
 嵌套字段的必填是指其父对象已提供时；可选父对象省略时无需补子字段。
 
@@ -49,18 +51,68 @@ TypedConfig 的 data 不是任意 JSON：必须递归满足 schema_ref 指向的
 | `phase` | string | 是 | 发生阶段；枚举：validation, queue, prepare, agent, model, tool, environment, score, persist, cleanup |
 | `message` | string | 是 | 可读说明，不放密钥或完整私有评分输入 |
 | `retryable` | boolean | 是 | 由错误分类决定的重试资格；不是立即重试命令 |
-| `operation_id` | string | 否 | 已经接纳的外部操作身份；按 phase 引用同一次操作已有的 generation_id、tool_call_id 或 environment_step_index 字符串，不另造第二套身份 |
+| `operation_id` | string | 否 | 已经接纳的外部操作身份；按 phase 引用同一次操作已有的 generation_id、tool_call_id，不另造第二套身份 |
 | `diagnostic_ref` | ArtifactRef | 否 | 完整诊断材料引用 |
 
-## ContentPart
+## TypedConfig
 
-消息内容段；文本与外部产物二选一，由 kind 指定
+扩展信封；必须由 SchemaRegistry 绑定 schema_ref 对应的已注册 schema 后校验 data，禁止仅做信封校验
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
-| `kind` | string | 是 | 内容种类；枚举：text, artifact |
+| `schema_ref` | string | 是 | 精确 schema URI，未知 URI 必须拒绝 |
+| `data` | 按 discriminator 选择 | 是 | 未绑定前禁止执行验证通过；SchemaRegistry 按已注册版本化 schema 替换为 oneOf/$ref |
+
+## Lease
+
+Server 颁发，Worker 核验；不能由用户任务参数携带
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `lease_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
+| `epoch` | integer | 是 | 服务实例任期；最小值：0 |
+| `expires_at_ms` | integer | 是 | UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟；最小值：0 |
+| `token` | string | 是 | 租约授权值；不得写入用户轨迹 |
+
+## SessionRef
+
+资源 session 身份；不等于 task_id 或 sample_id
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `session_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
+| `backend` | ResolvedComponent | 是 |  |
+
+## Usage
+
+本 episode 截至当前 attempt 的累计用量；不同操作独立计数，基础设施重试不清零
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `generation_count` | integer | 是 | 模型生成调用次数；最小值：0 |
+| `tool_call_count` | integer | 是 | 工具执行次数；最小值：0 |
+| `output_token_count` | integer | 是 | 已确认的实际生成 token 数；轨迹不完整时只表示已确认部分，不能推断缺失调用未消耗 token；最小值：0 |
+
+## Ack
+
+提交/上报/取消的确认
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `accepted` | boolean | 是 | 是否接受 |
+| `code` | string | 是 | OK/STALE_ATTEMPT/CONFLICT 等稳定码 |
+| `message` | string | 是 | 说明 |
+
+## ContentPart
+
+有序内容项；文本、文件引用、已登记模型的结构化内容三选一
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `kind` | string | 是 | 内容种类；枚举：text, artifact, structured |
 | `text` | string | 否 | 原始文本，不截断 |
 | `artifact` | ArtifactRef | 否 |  |
+| `structured` | TypedConfig | 否 | 公开结构化内容；作者传入 UEnvModel，SDK 生成信封，按已登记 schema 校验内部字段 |
 
 ## Message
 
@@ -73,14 +125,64 @@ TypedConfig 的 data 不是任意 JSON：必须递归满足 schema_ref 指向的
 | `tool_call_id` | string | 否 | 不透明身份标识；不得用其他实体的 ID 代填 |
 | `tool_calls` | array<ToolCall> | 否 | assistant 请求工具；复用统一结构，模型 API 只映射调用身份、名字和参数 |
 
-## TypedConfig
+## Observation
 
-扩展信封；必须由 SchemaRegistry 绑定 schema_ref 对应的已注册 schema 后校验 data，禁止仅做信封校验
+公开观测；content 统一承载文本、文件引用和结构化内容，不另设 data
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
-| `schema_ref` | string | 是 | 精确 schema URI，未知 URI 必须拒绝 |
-| `data` | 按 discriminator 选择 | 是 | 未绑定前禁止执行验证通过；SchemaRegistry 按已注册版本化 schema 替换为 oneOf/$ref |
+| `content` | array<ContentPart> | 是 | 有序原始可见内容 |
+| `terminated` | boolean | 是 | 环境到达自然终态；reset 通常为 false |
+| `episode_truncated` | boolean | 是 | 因外部预算等限制截断 |
+
+## GenerationEvent
+
+一次模型调用的原始记录；逐调用保留版本和 token 对齐
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `generation_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
+| `model_id` | string | 是 | 实际模型 |
+| `policy_version` | string | 否 | 实际策略版本 |
+| `parameter_version` | integer | 否 | 实际参数版本序号；最小值：0 |
+| `tokenizer` | ResolvedComponent | 否 |  |
+| `source` | string | 是 | 真实或模拟；枚举：real, simulated |
+| `messages` | array<Message> | 是 | 该次真实输入消息 |
+| `response` | array<ContentPart> | 是 | 该次原始内容输出；结构化工具请求在 tool_calls 中保留 |
+| `tool_calls` | array<ToolCall> | 否 | 本次模型请求的工具列表；身份和参数源自模型，implementation、generation_id、timeout_ms 由受控模型适配绑定；实际获准执行另写 tool_call 事件 |
+| `output_token_count` | integer | 是 | 本次实际生成 token 数；预算统计的唯一来源；最小值：0 |
+| `input_token_ids` | array<integer> | 否 | 真实输入 token 序列 |
+| `output_token_ids` | array<integer> | 否 | 真实生成 token 序列；存在时长度必须等于 output_token_count |
+| `output_logprobs` | array<number> | 否 | 长度必须等于 output_token_ids |
+| `loss_mask` | array<integer> | 否 | 与生成 token 一一对应 |
+| `finish_reason` | string | 是 | 模型停止原因；枚举：stop, tool_calls, length, cancelled, error |
+| `duration_ms` | integer | 是 | 模型调用耗时；最小值：0 |
+
+## ToolCall
+
+规范工具调用；模型请求与实际执行复用字段，阶段由所属消息或事件确定；动态 arguments 按工具 schema 验证
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `tool_call_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
+| `generation_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
+| `implementation` | ResolvedComponent | 是 |  |
+| `name` | string | 是 | ExecutionPlan.tools 中的唯一工具名；implementation 必须与该项一致 |
+| `arguments` | object | 是 | 模型填写的工具参数；执行前由 ToolHost 按已加载工具的 input_schema 严格校验 |
+| `timeout_ms` | integer | 是 | 允许执行时间；最小值：1 |
+
+## ToolResult
+
+统一工具结果信封，公开反馈仅在 observation 中保存
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `tool_call_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
+| `status` | string | 是 | 调用执行状态；枚举：ok, error, timeout, cancelled |
+| `observation` | Observation | 是 |  |
+| `output_truncated` | boolean | 是 | 输出预览是否裁剪 |
+| `raw_output_ref` | ArtifactRef | 否 |  |
+| `error` | ErrorRecord | 否 |  |
 
 ## DatasetRef
 
@@ -131,33 +233,21 @@ TypedConfig 的 data 不是任意 JSON：必须递归满足 schema_ref 指向的
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
 | `name` | string | 是 | 本次会话唯一工具名；绑定 SDK 工具时使用适配器声明的名字 |
-| `implementation` | ComponentRef | 是 | 实际执行实现；原生状态工具也发布为有版本的包装组件 |
+| `implementation` | ComponentRef | 是 | 实际工具引用；原生工具是 Agent 包内导出项，版本随 Agent，不单独发布 |
 | `config` | TypedConfig | 是 |  |
-
-## ToolInterface
-
-工具实现可使用的一种标准接入接口；Agent 按自己声明的优先顺序选择首个兼容项
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `interface` | string | 是 | 版本化接口标识，例如 mcp.v1 或 openhands_native.v1 |
-| `adapter` | ComponentRef | 是 | 把该工具接口接入 Agent 的受管适配器 |
-| `execution_scope` | string | 是 | 工具由哪个受控执行入口承接；不是底层访问授权；枚举：agent_state, sandbox, external_service |
-| `required_capabilities` | array<string> | 是 | 该接入方式需要的 Worker 能力；不会授予文件、网络或宿主权限 |
 
 ## ResolvedToolBinding
 
-预检后固定的实际工具绑定；Worker 初始化后必须核验 SDK 实际工具表与它一致
+唯一生效工具绑定；原生工具随所属 Agent 锁定，不独立发布适配器
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
 | `name` | string | 是 | 本次会话唯一模型可见工具名 |
 | `implementation` | ResolvedComponent | 是 |  |
-| `adapter` | ResolvedComponent | 是 |  |
 | `config` | TypedConfig | 是 |  |
-| `interface` | string | 是 | Agent 与工具共同支持并已锁定的版本化接入接口 |
-| `execution_scope` | string | 是 | 工具由哪个受控执行入口承接；不是底层访问授权；枚举：agent_state, sandbox, external_service |
-| `required_capabilities` | array<string> | 是 | 仅用于 Worker 兼容性匹配；不会授予文件、网络或宿主权限 |
+| `execution_scope` | string | 是 | 工具的受管执行位置；枚举：agent_state, sandbox, external_service |
+| `required_capabilities` | array<string> | 是 | 用于兼容性检查，不授予权限 |
+| `native_agent` | ResolvedComponent | 否 | 仅框架自带工具具有；必须等于本次所选 Agent，绑定代码及依赖版本 |
 
 ## Resources
 
@@ -202,7 +292,7 @@ TypedConfig 的 data 不是任意 JSON：必须递归满足 schema_ref 指向的
 | `model_id` | string | 是 | 模型身份 |
 | `generation` | GenerationConfig | 是 | ；提交默认值：{} |
 | `source` | string | 是 | 模型来源，模拟必须显式声明；枚举：real, simulated |
-| `max_transport_retries` | integer | 是 | 仅尚未产生可用生成结果时的网络重试上限；最小值：0；提交默认值：0 |
+| `max_transport_retries` | integer | 是 | 仅确认请求未被服务接纳，或服务支持同一请求幂等时的传输重试上限；是否接纳不明时禁止盲目重试；最小值：0；提交默认值：0 |
 
 ## Limits
 
@@ -211,10 +301,9 @@ TypedConfig 的 data 不是任意 JSON：必须递归满足 schema_ref 指向的
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
 | `total_timeout_ms` | integer | 是 | 从 Server 接收起的总预算，包含排队及评分；最小值：1 |
-| `finalize_reserve_ms` | integer | 是 | 为结果收集、冻结及可选评分预留时间；无评分也保留，全部共享总截止时间；最小值：0 |
-| `max_generations` | integer | 是 | 成功或部分完成的模型生成调用预算；最小值：1 |
+| `finalize_reserve_ms` | integer | 是 | 为提交校验、冻结及可选评分预留时间；无评分也保留，全部共享总截止时间；最小值：0 |
+| `max_generations` | integer | 是 | 获准发起的模型生成调用预算；调用失败仍消耗一次；最小值：1 |
 | `max_tool_calls` | integer | 是 | 接受执行的工具调用预算；最小值：0 |
-| `max_environment_steps` | integer | 是 | 环境转移次数预算；无状态任务可为 0；最小值：0 |
 | `max_total_output_tokens` | integer | 是 | episode 累计生成 token 上限；最小值：1 |
 
 ## TrainingSpec
@@ -239,6 +328,15 @@ episode 失败重试仅 Server 决定
 | `initial_backoff_ms` | integer | 是 | 初始退避毫秒；最小值：1；提交默认值：500 |
 | `max_backoff_ms` | integer | 是 | 退避上限毫秒；最小值：1；提交默认值：5000 |
 
+## ScoringSpec
+
+用户决定是否调用数据集包内 Scorer；不能另选评分包
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `enabled` | boolean | 是 | 用户必填；Server 校验包内评分入口，Worker 据此决定是否创建 ScorerHost |
+| `config` | TypedConfig | 否 | 启用时由包内 scorer_config 模型补值并校验；关闭时禁止填写 |
+
 ## RunSpec
 
 用户随批次提交的完整运行配置；同一 run_id 的内容不可修改
@@ -248,10 +346,11 @@ episode 失败重试仅 Server 决定
 | `schema_version` | 按 discriminator 选择 | 是 | 契约版本；固定值：vnext.3 |
 | `run_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
 | `purpose` | string | 是 | 结果用途；不决定评分算法；枚举：evaluation, training, trajectory_collection |
-| `environment` | ComponentSpec | 是 |  |
+| `dataset_package` | ComponentRef | 是 | 用户唯一的数据集代码包选择；Adapter、Environment 和 Scorer 来自同一包版本 |
+| `environment` | TypedConfig | 是 | 包内 Environment 的参数；不含实现选择 |
 | `agent` | ComponentSpec | 是 | 智能体实现与参数；不提供 Agent 池或 placement；按 agent 角色校验接口和配置 |
 | `tools` | array<ToolBinding> | 是 | 完整显式工具绑定；空数组要求实际无模型可见工具，不兼容的 Agent 必须拒绝 |
-| `scorer` | ComponentSpec | 否 | 唯一评分配置；评测和训练必填，轨迹采集可省略；省略即不评分，不接受 null |
+| `scoring` | ScoringSpec | 是 |  |
 | `backend` | BackendSpec | 是 |  |
 | `model` | ModelSpec | 是 |  |
 | `limits` | Limits | 是 |  |
@@ -259,6 +358,71 @@ episode 失败重试仅 Server 决定
 | `trajectory_retention_days` | integer | 是 | Server 保存权威轨迹的天数；只影响保留期，不改变记录内容；最小值：1；提交默认值：7 |
 | `training` | TrainingSpec | 否 | 仅 purpose=training 时必填；评测和轨迹采集时禁止出现 |
 | `runtime` | RuntimeSpec | 否 | 用户显式镜像选择，优先于 task 和 package |
+
+## ScoreInput
+
+Worker -> Python Scorer；只在交互结束并固定材料后创建，不能发送到 Agent
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `task` | TaskSpec | 是 |  |
+| `final_answer` | array<ContentPart> | 是 | Agent.run 显式返回的最终提交；文本、补丁文本、文件引用复用 ContentPart；可为空表示仅按环境状态评分，不自动提取最后一次模型响应或工作区修改 |
+| `trajectory_ref` | ArtifactRef | 是 |  |
+| `state` | TypedConfig | 否 | Environment.state_snapshot 提供的评分状态；只交给 Scorer，不进入公开结果 |
+| `private_data` | TypedConfig | 否 |  |
+
+## Metric
+
+一条 episode 的单个具名指标
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `name` | string | 是 | 如 accuracy/resolved/tests_passed |
+| `value` | number | 是 | 有限数，拒绝 NaN/Infinity |
+| `unit` | string | 是 | 如 ratio/count |
+| `direction` | string | 是 | 优化方向；枚举：higher, lower, none |
+
+## ScoreResult
+
+统一评分结果；Python Scorer 返回同名 SDK 类的业务字段，Rust Worker 补全系统字段后才满足本传输 schema
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `status` | string | 是 | 评分是否成功完成；系统维护，评分器不得填写；SDK 构造时为 None，最终传输按必填/可选规则校验；枚举：ok, error |
+| `success` | ['boolean', 'null'] | 是 | 任务是否成功；无法确定时为 null |
+| `metrics` | array<Metric> | 是 | 命名指标列表，名称唯一 |
+| `reward` | ['number', 'null'] | 是 | 本条 episode 的唯一奖励；评分成功时必须为有限数，评测展示与后训练复用该值 |
+| `generation_rewards` | array<object> | 否 | 可选逐次生成评分；Scorer 填写，Worker 验证归属，训练端按原 ID 消费 |
+| `generation_rewards[].generation_id` | string | 是 | 评分前轨迹中本 attempt 已记录的模型生成 ID |
+| `generation_rewards[].reward` | number | 是 | 该次生成的有限分数；缺项不补零，不与整体 reward 自动合并 |
+| `evidence` | array<ArtifactRef> | 是 | 评分证据 |
+| `scorer` | ResolvedComponent | 是 | ；系统维护，评分器不得填写；SDK 构造时为 None，最终传输按必填/可选规则校验 |
+| `error` | ErrorRecord | 否 | ；系统维护，评分器不得填写；SDK 构造时为 None，最终传输按必填/可选规则校验 |
+
+## HarnessRequest
+
+Scorer -> Worker 提供的 harness 执行能力
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `final_answer` | array<ContentPart> | 是 | Agent.run 显式返回的最终提交；文本、补丁文本、文件引用复用 ContentPart；可为空表示仅按环境状态评分，不自动提取最后一次模型响应或工作区修改 |
+| `state` | TypedConfig | 否 | Environment.state_snapshot 提供的评分状态；只交给 Scorer，不进入公开结果 |
+| `private_data` | TypedConfig | 是 | 原样传入；唯一评测配置在 data.evaluation_plan，不新增顶层副本 |
+| `remaining_timeout_ms` | integer | 是 | 剩余预算；最小值：1 |
+
+## HarnessResult
+
+harness 结果，候选失败和 harness 错误不同
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `status` | string | 是 | 评测程序是否正常完成；枚举：ok, error |
+| `success` | ['boolean', 'null'] | 是 | 正常完成时必须为布尔值 |
+| `tests_run` | integer | 是 | 实际测试数；最小值：0 |
+| `tests_passed` | integer | 是 | 通过数量；最小值：0 |
+| `report_ref` | ArtifactRef | 是 |  |
+| `metrics` | array<Metric> | 否 | 可选的详细指标 |
+| `error` | ErrorRecord | 否 |  |
 
 ## EpisodeRequest
 
@@ -293,17 +457,6 @@ Bridge -> Server；不接受客户端指定 attempt 或 lease
 | `batch_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
 | `episode_ids` | array<string> | 是 | 已接纳的 episode ID |
 
-## Lease
-
-Server 颁发，Worker 核验；不能由用户任务参数携带
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `lease_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `epoch` | integer | 是 | 服务实例任期；最小值：0 |
-| `expires_at_ms` | integer | 是 | UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟；最小值：0 |
-| `token` | string | 是 | 租约授权值；不得写入用户轨迹 |
-
 ## ExecutionPlan
 
 由请求与配置转换而来，不嵌套 EpisodeRequest/RunSpec；每项执行配置仅一处生效
@@ -319,9 +472,9 @@ Server 颁发，Worker 核验；不能由用户任务参数携带
 | `model` | ModelSpec | 是 |  |
 | `limits` | Limits | 是 |  |
 | `training` | TrainingSpec | 否 | 仅 purpose=training 时必填；评测和轨迹采集时禁止出现 |
-| `environment` | object | 是 | 选择一个实现及其 schema 验证后的参数 |
-| `environment.implementation` | ResolvedComponent | 是 |  |
-| `environment.config` | TypedConfig | 是 |  |
+| `environment` | TypedConfig | 是 | 包内 Environment 的参数；不含实现选择 |
+| `scoring` | ScoringSpec | 是 |  |
+| `dataset_package` | ResolvedComponent | 是 | 唯一锁定的数据集包；各角色按本包 manifest 加载，禁止跨包覆盖 |
 | `agent` | object | 是 | 选择一个实现及其 schema 验证后的参数 |
 | `agent.implementation` | ResolvedComponent | 是 |  |
 | `agent.config` | TypedConfig | 是 |  |
@@ -329,9 +482,6 @@ Server 颁发，Worker 核验；不能由用户任务参数携带
 | `backend.implementation` | ResolvedComponent | 是 |  |
 | `backend.config` | TypedConfig | 是 |  |
 | `backend.resources` | Resources | 是 | ；提交默认值：{} |
-| `scorer` | object | 否 | 选择一个实现及其 schema 验证后的参数 |
-| `scorer.implementation` | ResolvedComponent | 是 |  |
-| `scorer.config` | TypedConfig | 是 |  |
 | `attempt_id` | integer | 是 | Server 生成；正常首次执行为 1，只有基础设施重试才递增，且不重选配置；最小值：1 |
 | `tools` | array<ResolvedToolBinding> | 是 | 唯一生效工具表；保留 RunSpec.tools 的字段名，锁定版本和执行路由 |
 | `required_capabilities` | array<string> | 是 | 完整运行能力需求，仅供 Worker 调度与兼容性核验；不是访问授权 |
@@ -353,93 +503,6 @@ Server -> Worker；派生预算字段只能收紧 ExecutionPlan 中的限制
 | `remaining_timeout_ms` | integer | 是 | 派发时距离 plan.deadline_at_ms 的剩余上限；Worker 转为本机单调时钟；最小值：1 |
 | `consumed_usage` | Usage | 是 | 此前 attempt 已确认消耗的 episode 累计用量；首次派发全为 0 |
 
-## SessionRef
-
-资源 session 身份；不等于 task_id 或 sample_id
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `session_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `backend` | ResolvedComponent | 是 |  |
-
-## Observation
-
-模型可见观测；文本、多模态 artifact 与结构化数据可同时存在
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `content` | array<ContentPart> | 是 | 有序原始可见内容 |
-| `data` | TypedConfig | 否 | 结构化可见状态，不含评分私有材料 |
-
-## Transition
-
-一次环境动作产生的状态转移，不等于模型调用或工具调用
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `observation` | Observation | 是 |  |
-| `terminated` | boolean | 是 | 环境到达自然终态 |
-| `episode_truncated` | boolean | 是 | 因外部预算等限制截断 |
-| `environment_reward` | ['number', 'null'] | 否 | 可选环境原生信号，不自动成为训练 reward |
-
-## Outcome
-
-统一执行结果；Agent 提交与环境收集共用，state 仅由 Environment 填写
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `final_answer` | array<ContentPart> | 是 | 可以为空；不要求所有任务产生文本答案 |
-| `artifacts` | array<ArtifactRef> | 是 | 冻结的文件、补丁或其他产物 |
-| `state` | TypedConfig | 否 | 环境提供的评分状态快照，不发送给 Agent |
-| `termination_reason` | string | 是 | 交互为何结束；in_progress 只用于过程快照，系统取消或失败由 EpisodeResult.execution_status 与 ErrorRecord 表达；枚举：in_progress, final_answer, environment_terminal, budget_exhausted |
-
-## ScoreInput
-
-Worker -> Python Scorer；只在 episode 结束后创建，不能发送到 Agent
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `task` | TaskSpec | 是 |  |
-| `outcome` | Outcome | 是 |  |
-| `trajectory_ref` | ArtifactRef | 是 |  |
-| `private_data` | TypedConfig | 否 |  |
-
-## Metric
-
-一条 episode 的单个具名指标
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `name` | string | 是 | 如 accuracy/resolved/tests_passed |
-| `value` | number | 是 | 有限数，拒绝 NaN/Infinity |
-| `unit` | string | 是 | 如 ratio/count |
-| `direction` | string | 是 | 优化方向；枚举：higher, lower, none |
-
-## ScoreResult
-
-统一评分结果；Python Scorer 返回同名 SDK 类的业务字段，Rust Worker 补全系统字段后才满足本传输 schema
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `status` | string | 是 | 评分是否成功完成；系统维护，评分器不得填写；SDK 构造时为 None，最终传输按必填/可选规则校验；枚举：ok, error |
-| `success` | ['boolean', 'null'] | 是 | 任务是否成功；无法确定时为 null |
-| `metrics` | array<Metric> | 是 | 命名指标列表，名称唯一 |
-| `reward` | ['number', 'null'] | 是 | 本条 episode 的唯一奖励；评分成功时必须为有限数，评测展示与后训练复用该值 |
-| `evidence` | array<ArtifactRef> | 是 | 评分证据 |
-| `scorer` | ResolvedComponent | 是 | ；系统维护，评分器不得填写；SDK 构造时为 None，最终传输按必填/可选规则校验 |
-| `error` | ErrorRecord | 否 | ；系统维护，评分器不得填写；SDK 构造时为 None，最终传输按必填/可选规则校验 |
-
-## Usage
-
-本 episode 截至当前 attempt 的累计用量；不同操作独立计数，基础设施重试不清零
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `generation_count` | integer | 是 | 模型生成调用次数；最小值：0 |
-| `tool_call_count` | integer | 是 | 工具执行次数；最小值：0 |
-| `environment_step_count` | integer | 是 | 环境转移次数；最小值：0 |
-| `output_token_count` | integer | 是 | 实际生成 token 数；最小值：0 |
-
 ## EpisodeResult
 
 Worker 产生候选结果，Server 校验租约后形成唯一权威终态
@@ -452,184 +515,14 @@ Worker 产生候选结果，Server 校验租约后形成唯一权威终态
 | `task_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
 | `execution_status` | string | 是 | 执行是否完成；枚举：completed, failed, timeout, cancelled |
 | `score` | ScoreResult | 否 | 仅实际评分时产生；无评分省略，Server 结合 ExecutionPlan 校验应有评分，不能伪造零分 |
-| `outcome` | Outcome | 否 |  |
+| `final_answer` | array<ContentPart> | 否 | Agent.run 显式返回的最终提交；文本、补丁文本、文件引用复用 ContentPart；可为空表示仅按环境状态评分，不自动提取最后一次模型响应或工作区修改 |
+| `termination_reason` | string | 否 | Worker 根据实际停止事实填写；失败和取消使用 execution_status 与 error；枚举：final_answer, environment_terminal, environment_truncated, budget_exhausted |
 | `trajectory_ref` | ArtifactRef | 否 |  |
 | `usage` | Usage | 是 |  |
 | `started_at_ms` | integer | 否 | UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟；最小值：0 |
 | `finished_at_ms` | integer | 是 | UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟；最小值：0 |
 | `error` | ErrorRecord | 否 |  |
 | `cleanup_status` | string | 是 | 清理可独立重试，不改变任务评分；枚举：completed, pending, failed |
-
-## GenerationEvent
-
-一次模型调用的原始记录；逐调用保留版本和 token 对齐
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `generation_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `model_id` | string | 是 | 实际模型 |
-| `policy_version` | string | 否 | 实际策略版本 |
-| `parameter_version` | integer | 否 | 实际参数版本序号；最小值：0 |
-| `tokenizer` | ResolvedComponent | 否 |  |
-| `source` | string | 是 | 真实或模拟；枚举：real, simulated |
-| `messages` | array<Message> | 是 | 该次真实输入消息 |
-| `response` | array<ContentPart> | 是 | 该次原始内容输出；结构化工具请求在 tool_calls 中保留 |
-| `tool_calls` | array<ToolCall> | 否 | 本次模型请求的工具列表；身份和参数源自模型，implementation、generation_id、timeout_ms 由受控模型适配绑定；实际获准执行另写 tool_call 事件 |
-| `output_token_count` | integer | 是 | 本次实际生成 token 数；预算统计的唯一来源；最小值：0 |
-| `input_token_ids` | array<integer> | 否 | 真实输入 token 序列 |
-| `output_token_ids` | array<integer> | 否 | 真实生成 token 序列；存在时长度必须等于 output_token_count |
-| `output_logprobs` | array<number> | 否 | 长度必须等于 output_token_ids |
-| `loss_mask` | array<integer> | 否 | 与生成 token 一一对应 |
-| `finish_reason` | string | 是 | 模型停止原因；枚举：stop, tool_calls, length, cancelled, error |
-| `duration_ms` | integer | 是 | 模型调用耗时；最小值：0 |
-
-## ToolCall
-
-规范工具调用；模型请求与实际执行复用字段，阶段由所属消息或事件确定；动态 arguments 按工具 schema 验证
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `tool_call_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `generation_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `implementation` | ResolvedComponent | 是 |  |
-| `name` | string | 是 | ExecutionPlan.tools 中的唯一工具名；implementation 必须与该项一致 |
-| `arguments` | TypedConfig | 是 |  |
-| `timeout_ms` | integer | 是 | 允许执行时间；最小值：1 |
-
-## ToolResult
-
-工具结果不等于 episode 结果
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `tool_call_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `status` | string | 是 | 工具状态；枚举：ok, error, timeout, cancelled |
-| `content` | array<ContentPart> | 是 | 返回给 Agent 的内容 |
-| `output_truncated` | boolean | 是 | 仅标记工具返回预览是否截断 |
-| `raw_output_ref` | ArtifactRef | 否 |  |
-| `error` | ErrorRecord | 否 |  |
-
-## EnvironmentTransition
-
-动作前事实与 Environment.step 返回值；动作后字段只在 Transition 中定义一次
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `environment_step_index` | integer | 是 | 从 0 开始；最小值：0 |
-| `observation_before` | Observation | 是 | 动作前观测 |
-| `action` | TypedConfig | 是 |  |
-| `transition` | Transition | 是 | Environment.step 返回值的独立副本 |
-
-## StateEvent
-
-基础生命周期事件
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `phase` | string | 是 | 执行阶段；枚举：preparing, running, scoring, finalizing, cleaning |
-| `session` | SessionRef | 否 |  |
-
-## TrajectoryEvent
-
-所有数据集共享事件信封，事件 payload 按 kind 绑定
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `schema_version` | 按 discriminator 选择 | 是 | 契约版本；固定值：vnext.3 |
-| `event_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `run_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `episode_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `attempt_id` | integer | 是 | attempt 身份；最小值：1 |
-| `task_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `sequence` | integer | 是 | 由 Worker 事件收集器分配的连续序号，从 0 开始；最小值：0 |
-| `occurred_at_ms` | integer | 是 | UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟；最小值：0 |
-| `parent_event_id` | string | 否 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `kind` | string | 是 | 事件类型；枚举：state, observation, generation, tool_call, tool_result, environment_transition, score, error, terminal |
-| `payload` | 按 discriminator 选择 | 是 | 由 kind 决定的确定类型 |
-
-## TrajectoryManifest
-
-attempt 的轨迹索引；评分前快照与最终封存使用同一结构，终态事件不反向包含此索引
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `schema_version` | 按 discriminator 选择 | 是 | 契约版本；固定值：vnext.3 |
-| `run_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `episode_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `attempt_id` | integer | 是 | attempt 身份；最小值：1 |
-| `task_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `event_segments` | array<ArtifactRef> | 是 | 按 sequence 有序的 JSONL 事件分片 |
-| `event_count` | integer | 是 | 事件总数；最小值：0 |
-| `trajectory_status` | string | 是 | 清单所处阶段及最终记录完整性；不表示任务执行成功或失败；枚举：scoring_checkpoint, final_complete, final_partial |
-| `created_at_ms` | integer | 是 | UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟；最小值：0 |
-
-## TerminalEvent
-
-轨迹内终态摘要，避免与 EpisodeResult.trajectory_ref 形成 digest 环
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `execution_status` | string | 是 | 终态；枚举：completed, failed, timeout, cancelled |
-| `usage` | Usage | 是 |  |
-| `error` | ErrorRecord | 否 |  |
-
-## ToolSpec
-
-用户工具发布声明
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `implementation` | ComponentRef | 是 |  |
-| `entrypoint` | string | 是 | Python 函数或 ToolExecutor 的 module:symbol 入口 |
-| `config_schema` | string | 是 | ToolExecutor 构造配置的精确 schema 标识 |
-| `description` | string | 是 | 给 Agent 的说明 |
-| `interfaces` | array<ToolInterface> | 是 | 至少一种标准接入方式，接口名在本工具内唯一 |
-| `input_schema` | ArtifactRef | 是 |  |
-| `output_schema` | ArtifactRef | 是 |  |
-| `side_effect` | string | 是 | 副作用与重试依据；枚举：read_only, idempotent, non_idempotent |
-
-## AgentManifest
-
-自定义 Agent 的发布声明；按接口复用工具，不逐个登记所有工具实现
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `implementation` | ComponentRef | 是 |  |
-| `entrypoint` | string | 是 | AgentRunner 的 module:Class 入口 |
-| `config_schema` | string | 是 | AgentRunner 构造配置的精确 schema 标识 |
-| `supported_interfaces` | array<string> | 是 | 至少一项且不重复 |
-| `required_tool_names` | array<string> | 是 | 允许为空；空数组表示无必需工具 |
-
-## EntryPoints
-
-环境包 Python 入口，均为 module:Class
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `dataset_adapter` | string | 是 | 原始行 -> PreparedSample |
-| `environment` | string | 是 | Environment 实现 |
-| `scorer` | string | 否 | 提供评分时声明的专属 Scorer 入口；仅采集的包可省略 |
-
-## PackageManifest
-
-统一环境包，不绑定 agent 或 backend
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `runtime` | RuntimeSpec | 否 | 数据集包默认镜像候选 |
-| `id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
-| `version` | string | 是 | 精确版本 |
-| `entrypoints` | EntryPoints | 是 |  |
-| `task_schema` | string | 是 | 任务业务字段 schema 标识 |
-| `private_schema` | string | 否 | 私有评分字段 schema 标识 |
-| `config_schemas` | object | 是 | 已声明运行角色各自接受的配置 schema；scorer 与同名入口同时出现或省略 |
-| `config_schemas.environment` | string | 是 | Environment.config 接受的 schema 标识 |
-| `config_schemas.scorer` | string | 否 | Scorer.config 接受的 schema 标识 |
-| `internet_access` | boolean | 是 | Environment 是否需要公共互联网；数据行、RunSpec、Agent 和 Tool 不得覆盖 |
-| `required_capabilities` | array<string> | 是 | 部署所需的 Worker 功能；不写 Docker/OpenHands 名称，也不授予访问权限 |
-| `artifacts` | array<ArtifactRef> | 是 | 代码 wheel 和显式声明的运行文件；镜像只由 runtime.image 引用 |
-| `provided_tools` | array<ToolSpec> | 是 | 包可提供的工具声明；本次启用项只由 RunSpec.tools 决定 |
-| `schemas` | array<ArtifactRef> | 是 | 包发布的带 $id 的 JSON Schema，注册前校验 digest |
 
 ## WorkerRegistration
 
@@ -674,16 +567,6 @@ Worker 重传结果；Server 按 attempt+lease 去重和排除旧结果
 |---|---|---|---|
 | `lease` | Lease | 是 |  |
 | `result` | EpisodeResult | 是 |  |
-
-## Ack
-
-提交/上报/取消的确认
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `accepted` | boolean | 是 | 是否接受 |
-| `code` | string | 是 | OK/STALE_ATTEMPT/CONFLICT 等稳定码 |
-| `message` | string | 是 | 说明 |
 
 ## CursorRequest
 
@@ -731,30 +614,121 @@ Bridge 将统一轨迹映射为训练框架输入的规范中间结构
 | `generation_event_ids` | array<string> | 是 | 使用的模型生成事件，保持顺序 |
 | `reward` | number | 是 | 从唯一 ScoreResult.reward 复制的训练标量，不重新计算 |
 | `policy_versions` | array<string> | 是 | 与 generation_event_ids 一一对应 |
+| `generation_rewards` | array<object> | 否 | 可选逐次生成评分；Scorer 填写，Worker 验证归属，训练端按原 ID 消费 |
+| `generation_rewards[].generation_id` | string | 是 | 评分前轨迹中本 attempt 已记录的模型生成 ID |
+| `generation_rewards[].reward` | number | 是 | 该次生成的有限分数；缺项不补零，不与整体 reward 自动合并 |
 | `trajectory_ref` | ArtifactRef | 是 |  |
 
-## HarnessRequest
+## ToolSpec
 
-Scorer -> Worker 提供的 harness 执行能力
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `outcome` | Outcome | 是 | 与 ScoreInput.outcome 相同的完整评分快照，不另命名或只传 artifacts |
-| `private_data` | TypedConfig | 是 | 原样传入；唯一评测配置在 data.evaluation_plan，不新增顶层副本 |
-| `remaining_timeout_ms` | integer | 是 | 剩余预算；最小值：1 |
-
-## HarnessResult
-
-harness 结果，候选失败和 harness 错误不同
+用户工具发布声明
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
-| `status` | string | 是 | 评测程序是否正常完成；枚举：ok, error |
-| `success` | ['boolean', 'null'] | 是 | 正常完成时必须为布尔值 |
-| `tests_run` | integer | 是 | 实际测试数；最小值：0 |
-| `tests_passed` | integer | 是 | 通过数量；最小值：0 |
-| `report_ref` | ArtifactRef | 是 |  |
-| `metrics` | array<Metric> | 否 | 可选的详细指标 |
+| `implementation` | ComponentRef | 是 |  |
+| `entrypoint` | string | 是 | Python 函数或 ToolExecutor 的 module:symbol 入口 |
+| `config_schema` | string | 是 | ToolExecutor 构造配置的精确 schema 标识 |
+| `description` | string | 是 | 给 Agent 的说明 |
+| `execution_scope` | string | 是 | 工具的受管执行位置；枚举：agent_state, sandbox, external_service |
+| `required_capabilities` | array<string> | 是 | 用于兼容性检查，不授予权限 |
+| `input_schema` | ArtifactRef | 是 | 作者发布参数 schema，ToolHost 在执行前校验 arguments |
+| `output_schema` | ArtifactRef | 否 | 作者按需发布结构化返回 schema，ToolHost 校验工具返回值；纯文本工具省略 |
+| `side_effect` | string | 是 | 副作用与重试依据；枚举：read_only, idempotent, non_idempotent |
+
+## AgentManifest
+
+自定义 Agent 的发布声明；按接口复用工具，不逐个登记所有工具实现
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `implementation` | ComponentRef | 是 |  |
+| `entrypoint` | string | 是 | AgentRunner 的 module:Class 入口 |
+| `config_schema` | string | 是 | AgentRunner 构造配置的精确 schema 标识 |
+| `provided_tools` | array<ToolSpec> | 是 | 框架接入代码导出的原生工具描述；来自原框架定义，不要求用户重复编写或单独发布 |
+| `required_tool_names` | array<string> | 是 | 允许为空；空数组表示无必需工具 |
+
+## EntryPoints
+
+环境包 Python 入口，均为 module:Class
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `dataset_adapter` | string | 是 | 原始行 -> PreparedSample |
+| `environment` | string | 是 | Environment 实现 |
+| `scorer` | string | 否 | 提供评分时声明的专属 Scorer 入口；仅采集的包可省略 |
+
+## PackageManifest
+
+统一环境包，不绑定 agent 或 backend
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `runtime` | RuntimeSpec | 否 | 数据集包默认镜像候选 |
+| `id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
+| `version` | string | 是 | 精确版本 |
+| `entrypoints` | EntryPoints | 是 |  |
+| `task_schema` | string | 是 | 任务业务字段 schema 标识 |
+| `private_schema` | string | 否 | 私有评分字段 schema 标识 |
+| `config_schemas` | object | 是 | 已声明运行角色各自接受的配置 schema；scorer 与同名入口同时出现或省略 |
+| `config_schemas.environment` | string | 是 | Environment.config 接受的 schema 标识 |
+| `config_schemas.scorer` | string | 否 | Scorer.config 接受的 schema 标识 |
+| `internet_access` | boolean | 是 | Environment 是否需要公共互联网；数据行、RunSpec、Agent 和 Tool 不得覆盖 |
+| `required_capabilities` | array<string> | 是 | 部署所需的 Worker 功能；不写 Docker/OpenHands 名称，也不授予访问权限 |
+| `artifacts` | array<ArtifactRef> | 是 | 代码 wheel 和显式声明的运行文件；镜像只由 runtime.image 引用 |
+| `provided_tools` | array<ToolSpec> | 是 | 包可提供的工具声明；本次启用项只由 RunSpec.tools 决定 |
+| `schemas` | array<ArtifactRef> | 是 | 包发布的带 $id 的 JSON Schema，注册前校验 digest |
+
+## StateEvent
+
+基础生命周期事件
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `phase` | string | 是 | 执行阶段；枚举：preparing, running, scoring, finalizing, cleaning |
+| `session` | SessionRef | 否 |  |
+
+## TrajectoryEvent
+
+所有数据集共享事件信封，事件 payload 按 kind 绑定
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `schema_version` | 按 discriminator 选择 | 是 | 契约版本；固定值：vnext.3 |
+| `event_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
+| `run_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
+| `episode_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
+| `attempt_id` | integer | 是 | attempt 身份；最小值：1 |
+| `task_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
+| `sequence` | integer | 是 | 由 Worker 事件收集器分配的连续序号，从 0 开始；最小值：0 |
+| `occurred_at_ms` | integer | 是 | UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟；最小值：0 |
+| `parent_event_id` | string | 否 | 不透明身份标识；不得用其他实体的 ID 代填 |
+| `kind` | string | 是 | 事件类型；枚举：state, observation, generation, tool_call, tool_result, score, error, terminal |
+| `payload` | 按 discriminator 选择 | 是 | 由 kind 决定的确定类型 |
+
+## TrajectoryManifest
+
+attempt 的轨迹索引；评分前快照与最终封存使用同一结构，终态事件不反向包含此索引
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `schema_version` | 按 discriminator 选择 | 是 | 契约版本；固定值：vnext.3 |
+| `run_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
+| `episode_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
+| `attempt_id` | integer | 是 | attempt 身份；最小值：1 |
+| `task_id` | string | 是 | 不透明身份标识；不得用其他实体的 ID 代填 |
+| `event_segments` | array<ArtifactRef> | 是 | 按 sequence 有序的 JSONL 事件分片 |
+| `event_count` | integer | 是 | 事件总数；最小值：0 |
+| `trajectory_status` | string | 是 | 清单所处阶段及最终记录完整性；不表示任务执行成功或失败；枚举：scoring_checkpoint, final_complete, final_partial |
+| `created_at_ms` | integer | 是 | UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟；最小值：0 |
+
+## TerminalEvent
+
+轨迹内终态摘要，避免与 EpisodeResult.trajectory_ref 形成 digest 环
+
+| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
+|---|---|---|---|
+| `execution_status` | string | 是 | 终态；枚举：completed, failed, timeout, cancelled |
+| `usage` | Usage | 是 |  |
 | `error` | ErrorRecord | 否 |  |
 
 ## EmptyConfig
@@ -770,7 +744,7 @@ harness 结果，候选失败和 harness 错误不同
 
 | 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
 |---|---|---|---|
-| `history_policy` | string | 是 | full 保留完整历史；last_generation 保留系统提示、初始任务和最近一次完整模型及工具交互；枚举：full, last_generation；提交默认值："full" |
+| `history_policy` | string | 是 | full 保留完整历史；last_generation 保留系统提示、初始任务和最近一次完整模型及工具或环境交互；枚举：full, last_generation；提交默认值："full" |
 | `system_prompt` | string | 是 | 智能体系统提示词；空表示不额外添加；提交默认值："" |
 
 ## OpenHandsAgentConfig
@@ -830,14 +804,6 @@ Docker/Podman 无额外用户参数；引擎连接属于 Worker 部署配置，�
 |---|---|---|---|
 | `path` | string | 是 | 工作区内路径 |
 | `content` | string | 是 | 完整写入内容 |
-
-## AnswerAction
-
-问答环境动作
-
-| 字段 | 类型/嵌套结构 | 必填 | 含义/约束 |
-|---|---|---|---|
-| `answer` | string | 是 | 完整回答 |
 
 ## EvaluationPlan
 

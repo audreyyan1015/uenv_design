@@ -1,0 +1,29 @@
+syntax = "proto3";
+package uenv.v1;
+import "google/protobuf/struct.proto";
+import "uenv/v1/annotations.proto";
+import "uenv/v1/common.proto";
+
+message DatasetRef {
+  option (message_rule) = "{\"description\":\"数据来源身份\",\"additionalProperties\":false}";
+  optional string id = 1 [json_name = "id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string revision = 2 [json_name = "revision", (required) = true, (field_rule) = "{\"description\":\"不可变数据版本或内容 digest\"}"];
+  optional string split = 3 [json_name = "split", (required) = true, (field_rule) = "{\"description\":\"数据划分名\"}"];
+  optional string subset = 4 [json_name = "subset", (required) = true, (field_rule) = "{\"description\":\"数据子集名；无子集为空\"}"];
+}
+
+message RuntimeSpec {
+  option (message_rule) = "{\"description\":\"镜像候选；按 run、task、package 优先级选择，字段始终叫 image\",\"additionalProperties\":false}";
+  optional string image = 1 [json_name = "image", (required) = true, (field_rule) = "{\"description\":\"非空 OCI 镜像引用；执行计划必须锁定内容 digest\",\"minLength\":1}"];
+}
+
+message TaskSpec {
+  option (message_rule) = "{\"description\":\"唯一公开任务定义；可传给 Environment/Agent；不含评分材料及引用；runtime 仅声明样本运行资源候选，不选择后端\",\"additionalProperties\":false}";
+  optional google.protobuf.Value schema_version = 1 [json_name = "schema_version", (required) = true, (field_rule) = "{\"const\":\"vnext.3\",\"description\":\"契约版本\"}"];
+  optional string task_id = 2 [json_name = "task_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional DatasetRef dataset = 3 [json_name = "dataset", (required) = true];
+  optional string sample_id = 4 [json_name = "sample_id", (required) = true, (field_rule) = "{\"description\":\"数据集内稳定样本 ID\"}"];
+  optional TypedConfig input = 5 [json_name = "input", (required) = true, (field_rule) = "{\"description\":\"公开业务字段，必须由 dataset package 声明其 schema\"}"];
+  optional string input_digest = 6 [json_name = "input_digest", (required) = true, (field_rule) = "{\"description\":\"内容 SHA-256；必须对应实际字节\",\"pattern\":\"^sha256:[0-9a-f]{64}$\"}"];
+  optional RuntimeSpec runtime = 7 [json_name = "runtime", (field_rule) = "{\"description\":\"可选样本镜像候选，不是最终执行镜像\"}"];
+}

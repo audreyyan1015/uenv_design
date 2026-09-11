@@ -1,0 +1,112 @@
+syntax = "proto3";
+package uenv.v1;
+import "google/protobuf/struct.proto";
+import "uenv/v1/annotations.proto";
+import "uenv/v1/common.proto";
+import "uenv/v1/task.proto";
+
+message ComponentSpec {
+  option (message_rule) = "{\"description\":\"选择一个实现及其 schema 验证后的参数\",\"additionalProperties\":false}";
+  optional ComponentRef implementation = 1 [json_name = "implementation", (required) = true];
+  optional TypedConfig config = 2 [json_name = "config", (required) = true];
+}
+
+message ToolBinding {
+  option (message_rule) = "{\"description\":\"用户明确授权的一项模型可见工具；包含 SDK 原生工具，不自动合并默认工具\",\"additionalProperties\":false}";
+  optional string name = 1 [json_name = "name", (required) = true, (field_rule) = "{\"description\":\"本次会话唯一工具名；绑定 SDK 工具时使用适配器声明的名字\",\"minLength\":1}"];
+  optional ComponentRef implementation = 2 [json_name = "implementation", (required) = true, (field_rule) = "{\"description\":\"实际工具引用；原生工具是 Agent 包内导出项，版本随 Agent，不单独发布\"}"];
+  optional TypedConfig config = 3 [json_name = "config", (required) = true];
+}
+
+message ResolvedToolBinding {
+  option (message_rule) = "{\"description\":\"唯一生效工具绑定；原生工具随所属 Agent 锁定，不独立发布适配器\",\"additionalProperties\":false}";
+  optional string name = 1 [json_name = "name", (required) = true, (field_rule) = "{\"description\":\"本次会话唯一模型可见工具名\",\"minLength\":1}"];
+  optional ResolvedComponent implementation = 2 [json_name = "implementation", (required) = true];
+  optional TypedConfig config = 3 [json_name = "config", (required) = true];
+  optional string execution_scope = 4 [json_name = "execution_scope", (required) = true, (field_rule) = "{\"description\":\"工具的受管执行位置\",\"enum\":[\"agent_state\",\"sandbox\",\"external_service\"]}"];
+  repeated string required_capabilities = 5 [json_name = "required_capabilities", (required) = true, (field_rule) = "{\"description\":\"用于兼容性检查，不授予权限\",\"items\":{\"description\":\"版本化运行能力标识\"}}"];
+  optional ResolvedComponent native_agent = 6 [json_name = "native_agent", (field_rule) = "{\"description\":\"仅框架自带工具具有；必须等于本次所选 Agent，绑定代码及依赖版本\"}"];
+}
+
+message Resources {
+  option (message_rule) = "{\"description\":\"每个 episode 的资源上限；Worker 还需套管理员上限\",\"additionalProperties\":false}";
+  optional double cpu_cores = 1 [json_name = "cpu_cores", (required) = true, (field_rule) = "{\"description\":\"CPU 核数\",\"exclusiveMinimum\":0,\"default\":1}"];
+  optional int64 memory_bytes = 2 [json_name = "memory_bytes", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"内存字节数\",\"default\":1073741824}"];
+  optional int64 process_limit = 3 [json_name = "process_limit", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"最大进程数\",\"default\":64}"];
+  optional int64 disk_bytes = 4 [json_name = "disk_bytes", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"工作区字节预算\",\"default\":1073741824}"];
+}
+
+message BackendSpec {
+  option (message_rule) = "{\"description\":\"由用户明确选择的任务后端；不读取数据集名称做选择\",\"additionalProperties\":false}";
+  optional ComponentRef implementation = 1 [json_name = "implementation", (required) = true];
+  optional TypedConfig config = 2 [json_name = "config", (required) = true];
+  optional Resources resources = 3 [json_name = "resources", (required) = true, (field_rule) = "{\"default\":{}}"];
+}
+
+message GenerationConfig {
+  option (message_rule) = "{\"description\":\"规范模型生成参数；额外 provider 参数须另注册 schema\",\"additionalProperties\":false}";
+  optional double temperature = 1 [json_name = "temperature", (required) = true, (field_rule) = "{\"description\":\"采样温度\",\"minimum\":0,\"default\":0}"];
+  optional double top_p = 2 [json_name = "top_p", (required) = true, (field_rule) = "{\"description\":\"核采样概率\",\"exclusiveMinimum\":0,\"maximum\":1,\"default\":1}"];
+  optional int64 max_output_tokens = 3 [json_name = "max_output_tokens", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"单次生成最大 token 数\",\"default\":1024}"];
+  repeated string stop = 4 [json_name = "stop", (required) = true, (field_rule) = "{\"description\":\"停止字符串列表\",\"default\":[],\"items\":{\"description\":\"停止串\"}}"];
+}
+
+message ModelSpec {
+  option (message_rule) = "{\"description\":\"统一模型端点；训练时可指向 Bridge ModelGateway\",\"additionalProperties\":false}";
+  optional string endpoint = 1 [json_name = "endpoint", (required) = true, (field_rule) = "{\"description\":\"端点地址，不包含密钥\"}"];
+  optional string credential_ref = 2 [json_name = "credential_ref", (required) = true, (field_rule) = "{\"description\":\"凭据引用；允许空表示不需要凭据\",\"default\":\"\"}"];
+  optional string model_id = 3 [json_name = "model_id", (required) = true, (field_rule) = "{\"description\":\"模型身份\"}"];
+  optional GenerationConfig generation = 4 [json_name = "generation", (required) = true, (field_rule) = "{\"default\":{}}"];
+  optional string source = 5 [json_name = "source", (required) = true, (field_rule) = "{\"description\":\"模型来源，模拟必须显式声明\",\"enum\":[\"real\",\"simulated\"]}"];
+  optional int64 max_transport_retries = 6 [json_name = "max_transport_retries", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"仅确认请求未被服务接纳，或服务支持同一请求幂等时的传输重试上限；是否接纳不明时禁止盲目重试\",\"default\":0}"];
+}
+
+message Limits {
+  option (message_rule) = "{\"description\":\"预算命名不可混用；完整 RunSpec 必须包含所有预算值\",\"additionalProperties\":false}";
+  optional int64 total_timeout_ms = 1 [json_name = "total_timeout_ms", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"从 Server 接收起的总预算，包含排队及评分\"}"];
+  optional int64 finalize_reserve_ms = 2 [json_name = "finalize_reserve_ms", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"为提交校验、冻结及可选评分预留时间；无评分也保留，全部共享总截止时间\"}"];
+  optional int64 max_generations = 3 [json_name = "max_generations", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"获准发起的模型生成调用预算；调用失败仍消耗一次\"}"];
+  optional int64 max_tool_calls = 4 [json_name = "max_tool_calls", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"接受执行的工具调用预算\"}"];
+  optional int64 max_total_output_tokens = 5 [json_name = "max_total_output_tokens", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"episode 累计生成 token 上限\"}"];
+}
+
+message TrainingSpec {
+  option (message_rule) = "{\"description\":\"训练接入规则，不是数据集参数\",\"additionalProperties\":false}";
+  optional string parallel_mode = 1 [json_name = "parallel_mode", (required) = true, (field_rule) = "{\"description\":\"提交/消费策略\",\"enum\":[\"sync\",\"one_step_off_policy\",\"fully_async\"]}"];
+  optional bool require_token_trace = 2 [json_name = "require_token_trace", (required) = true, (field_rule) = "{\"description\":\"为 true 时缺少真实 token/logprob 必须拒绝进入训练\"}"];
+  optional string version_policy = 3 [json_name = "version_policy", (required) = true, (field_rule) = "{\"description\":\"模型版本规则\",\"enum\":[\"fixed_episode\",\"per_generation\"]}"];
+  optional string requested_policy_version = 4 [json_name = "requested_policy_version", (required) = true, (field_rule) = "{\"description\":\"期望版本，fixed_episode 必填；per_generation 可空\"}"];
+  optional int64 max_policy_lag = 5 [json_name = "max_policy_lag", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"允许的版本落后量；需模型注册表提供可比较序号\"}"];
+}
+
+message RetryPolicy {
+  option (message_rule) = "{\"description\":\"episode 失败重试仅 Server 决定\",\"additionalProperties\":false}";
+  optional int64 max_attempts = 1 [json_name = "max_attempts", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"含首次在内的最大 attempt 数\",\"default\":1}"];
+  optional int64 initial_backoff_ms = 2 [json_name = "initial_backoff_ms", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"初始退避毫秒\",\"default\":500}"];
+  optional int64 max_backoff_ms = 3 [json_name = "max_backoff_ms", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"退避上限毫秒\",\"default\":5000}"];
+}
+
+message ScoringSpec {
+  option (message_rule) = "{\"description\":\"用户决定是否调用数据集包内 Scorer；不能另选评分包\",\"additionalProperties\":false,\"allOf\":[{\"if\":{\"properties\":{\"enabled\":{\"const\":true}}},\"then\":{\"required\":[\"config\"]},\"else\":{\"not\":{\"required\":[\"config\"]}}}]}";
+  optional bool enabled = 1 [json_name = "enabled", (required) = true, (field_rule) = "{\"description\":\"用户必填；Server 校验包内评分入口，Worker 据此决定是否创建 ScorerHost\"}"];
+  optional TypedConfig config = 2 [json_name = "config", (field_rule) = "{\"description\":\"启用时由包内 scorer_config 模型补值并校验；关闭时禁止填写\"}"];
+}
+
+message RunSpec {
+  option (message_rule) = "{\"description\":\"用户随批次提交的完整运行配置；同一 run_id 的内容不可修改\",\"additionalProperties\":false,\"allOf\":[{\"if\":{\"properties\":{\"purpose\":{\"const\":\"training\"}}},\"then\":{\"required\":[\"training\"]},\"else\":{\"not\":{\"required\":[\"training\"]}}},{\"if\":{\"properties\":{\"purpose\":{\"enum\":[\"evaluation\",\"training\"]}}},\"then\":{\"properties\":{\"scoring\":{\"properties\":{\"enabled\":{\"const\":true}}}}}}]}";
+  optional google.protobuf.Value schema_version = 1 [json_name = "schema_version", (required) = true, (field_rule) = "{\"const\":\"vnext.3\",\"description\":\"契约版本\"}"];
+  optional string run_id = 2 [json_name = "run_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string purpose = 3 [json_name = "purpose", (required) = true, (field_rule) = "{\"description\":\"结果用途；不决定评分算法\",\"enum\":[\"evaluation\",\"training\",\"trajectory_collection\"]}"];
+  optional ComponentRef dataset_package = 4 [json_name = "dataset_package", (required) = true, (field_rule) = "{\"description\":\"用户唯一的数据集代码包选择；Adapter、Environment 和 Scorer 来自同一包版本\"}"];
+  optional TypedConfig environment = 5 [json_name = "environment", (required) = true, (field_rule) = "{\"description\":\"包内 Environment 的参数；不含实现选择\"}"];
+  optional ComponentSpec agent = 6 [json_name = "agent", (required) = true, (field_rule) = "{\"description\":\"智能体实现与参数；不提供 Agent 池或 placement；按 agent 角色校验接口和配置\"}"];
+  repeated ToolBinding tools = 7 [json_name = "tools", (required) = true, (field_rule) = "{\"description\":\"完整显式工具绑定；空数组要求实际无模型可见工具，不兼容的 Agent 必须拒绝\"}"];
+  optional ScoringSpec scoring = 8 [json_name = "scoring", (required) = true];
+  optional BackendSpec backend = 9 [json_name = "backend", (required) = true];
+  optional ModelSpec model = 10 [json_name = "model", (required) = true];
+  optional Limits limits = 11 [json_name = "limits", (required) = true];
+  optional RetryPolicy retry = 12 [json_name = "retry", (required) = true, (field_rule) = "{\"default\":{}}"];
+  optional int64 trajectory_retention_days = 13 [json_name = "trajectory_retention_days", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"Server 保存权威轨迹的天数；只影响保留期，不改变记录内容\",\"default\":7}"];
+  optional TrainingSpec training = 14 [json_name = "training", (field_rule) = "{\"description\":\"仅 purpose=training 时必填；评测和轨迹采集时禁止出现\"}"];
+  optional RuntimeSpec runtime = 15 [json_name = "runtime", (field_rule) = "{\"description\":\"用户显式镜像选择，优先于 task 和 package\"}"];
+}

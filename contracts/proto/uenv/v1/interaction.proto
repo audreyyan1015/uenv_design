@@ -1,0 +1,68 @@
+syntax = "proto3";
+package uenv.v1;
+import "google/protobuf/struct.proto";
+import "uenv/v1/annotations.proto";
+import "uenv/v1/common.proto";
+
+message ContentPart {
+  option (message_rule) = "{\"description\":\"有序内容项；文本、文件引用、已登记模型的结构化内容三选一\",\"additionalProperties\":false,\"oneOf\":[{\"properties\":{\"kind\":{\"const\":\"text\"}},\"required\":[\"text\"],\"not\":{\"anyOf\":[{\"required\":[\"artifact\"]},{\"required\":[\"structured\"]}]}},{\"properties\":{\"kind\":{\"const\":\"artifact\"}},\"required\":[\"artifact\"],\"not\":{\"anyOf\":[{\"required\":[\"text\"]},{\"required\":[\"structured\"]}]}},{\"properties\":{\"kind\":{\"const\":\"structured\"}},\"required\":[\"structured\"],\"not\":{\"anyOf\":[{\"required\":[\"text\"]},{\"required\":[\"artifact\"]}]}}]}";
+  optional string kind = 1 [json_name = "kind", (required) = true, (field_rule) = "{\"description\":\"内容种类\",\"enum\":[\"text\",\"artifact\",\"structured\"]}"];
+  optional string text = 2 [json_name = "text", (field_rule) = "{\"description\":\"原始文本，不截断\"}"];
+  optional ArtifactRef artifact = 3 [json_name = "artifact"];
+  optional TypedConfig structured = 4 [json_name = "structured", (field_rule) = "{\"description\":\"公开结构化内容；作者传入 UEnvModel，SDK 生成信封，按已登记 schema 校验内部字段\"}"];
+}
+
+message Message {
+  option (message_rule) = "{\"description\":\"规范模型消息；assistant 可包含已归一化的工具请求，实际执行另记事件\",\"additionalProperties\":false,\"allOf\":[{\"if\":{\"required\":[\"tool_calls\"]},\"then\":{\"properties\":{\"role\":{\"const\":\"assistant\"}}}},{\"if\":{\"properties\":{\"role\":{\"const\":\"tool\"}}},\"then\":{\"required\":[\"tool_call_id\"]},\"else\":{\"not\":{\"required\":[\"tool_call_id\"]}}}]}";
+  optional string role = 1 [json_name = "role", (required) = true, (field_rule) = "{\"description\":\"消息来源\",\"enum\":[\"system\",\"user\",\"assistant\",\"tool\"]}"];
+  repeated ContentPart content = 2 [json_name = "content", (required) = true, (field_rule) = "{\"description\":\"有序内容段\"}"];
+  optional string tool_call_id = 3 [json_name = "tool_call_id", (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  repeated ToolCall tool_calls = 4 [json_name = "tool_calls", (field_rule) = "{\"description\":\"assistant 请求工具；复用统一结构，模型 API 只映射调用身份、名字和参数\",\"minItems\":1}"];
+}
+
+message Observation {
+  option (message_rule) = "{\"description\":\"公开观测；content 统一承载文本、文件引用和结构化内容，不另设 data\",\"additionalProperties\":false}";
+  repeated ContentPart content = 1 [json_name = "content", (required) = true, (field_rule) = "{\"description\":\"有序原始可见内容\"}"];
+  optional bool terminated = 2 [json_name = "terminated", (required) = true, (field_rule) = "{\"description\":\"环境到达自然终态；reset 通常为 false\"}"];
+  optional bool episode_truncated = 3 [json_name = "episode_truncated", (required) = true, (field_rule) = "{\"description\":\"因外部预算等限制截断\"}"];
+}
+
+message GenerationEvent {
+  option (message_rule) = "{\"description\":\"一次模型调用的原始记录；逐调用保留版本和 token 对齐\",\"additionalProperties\":false,\"allOf\":[{\"if\":{\"properties\":{\"finish_reason\":{\"const\":\"tool_calls\"}}},\"then\":{\"required\":[\"tool_calls\"]},\"else\":{\"not\":{\"required\":[\"tool_calls\"]}}}],\"dependentRequired\":{\"output_logprobs\":[\"output_token_ids\"],\"loss_mask\":[\"output_token_ids\"]}}";
+  optional string generation_id = 1 [json_name = "generation_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string model_id = 2 [json_name = "model_id", (required) = true, (field_rule) = "{\"description\":\"实际模型\"}"];
+  optional string policy_version = 3 [json_name = "policy_version", (field_rule) = "{\"description\":\"实际策略版本\"}"];
+  optional int64 parameter_version = 4 [json_name = "parameter_version", (field_rule) = "{\"minimum\":0,\"description\":\"实际参数版本序号\"}"];
+  optional ResolvedComponent tokenizer = 5 [json_name = "tokenizer"];
+  optional string source = 6 [json_name = "source", (required) = true, (field_rule) = "{\"description\":\"真实或模拟\",\"enum\":[\"real\",\"simulated\"]}"];
+  repeated Message messages = 7 [json_name = "messages", (required) = true, (field_rule) = "{\"description\":\"该次真实输入消息\"}"];
+  repeated ContentPart response = 8 [json_name = "response", (required) = true, (field_rule) = "{\"description\":\"该次原始内容输出；结构化工具请求在 tool_calls 中保留\"}"];
+  repeated ToolCall tool_calls = 9 [json_name = "tool_calls", (field_rule) = "{\"description\":\"本次模型请求的工具列表；身份和参数源自模型，implementation、generation_id、timeout_ms 由受控模型适配绑定；实际获准执行另写 tool_call 事件\",\"minItems\":1}"];
+  optional int64 output_token_count = 10 [json_name = "output_token_count", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"本次实际生成 token 数；预算统计的唯一来源\"}"];
+  repeated int64 input_token_ids = 11 [json_name = "input_token_ids", (field_rule) = "{\"description\":\"真实输入 token 序列\",\"items\":{\"minimum\":0,\"description\":\"token ID\"}}"];
+  repeated int64 output_token_ids = 12 [json_name = "output_token_ids", (field_rule) = "{\"description\":\"真实生成 token 序列；存在时长度必须等于 output_token_count\",\"items\":{\"minimum\":0,\"description\":\"token ID\"}}"];
+  repeated double output_logprobs = 13 [json_name = "output_logprobs", (field_rule) = "{\"description\":\"长度必须等于 output_token_ids\",\"items\":{\"description\":\"token 对数概率\"}}"];
+  repeated int64 loss_mask = 14 [json_name = "loss_mask", (field_rule) = "{\"description\":\"与生成 token 一一对应\",\"items\":{\"enum\":[0,1],\"description\":\"是否参与训练损失\"}}"];
+  optional string finish_reason = 15 [json_name = "finish_reason", (required) = true, (field_rule) = "{\"description\":\"模型停止原因\",\"enum\":[\"stop\",\"tool_calls\",\"length\",\"cancelled\",\"error\"]}"];
+  optional int64 duration_ms = 16 [json_name = "duration_ms", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"模型调用耗时\"}"];
+}
+
+message ToolCall {
+  option (message_rule) = "{\"description\":\"规范工具调用；模型请求与实际执行复用字段，阶段由所属消息或事件确定；动态 arguments 按工具 schema 验证\",\"additionalProperties\":false}";
+  optional string tool_call_id = 1 [json_name = "tool_call_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string generation_id = 2 [json_name = "generation_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional ResolvedComponent implementation = 3 [json_name = "implementation", (required) = true];
+  optional string name = 4 [json_name = "name", (required) = true, (field_rule) = "{\"description\":\"ExecutionPlan.tools 中的唯一工具名；implementation 必须与该项一致\"}"];
+  optional google.protobuf.Struct arguments = 5 [json_name = "arguments", (required) = true, (field_rule) = "{\"description\":\"模型填写的工具参数；执行前由 ToolHost 按已加载工具的 input_schema 严格校验\"}"];
+  optional int64 timeout_ms = 6 [json_name = "timeout_ms", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"允许执行时间\"}"];
+}
+
+message ToolResult {
+  option (message_rule) = "{\"description\":\"统一工具结果信封，公开反馈仅在 observation 中保存\",\"additionalProperties\":false}";
+  optional string tool_call_id = 1 [json_name = "tool_call_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string status = 2 [json_name = "status", (required) = true, (field_rule) = "{\"description\":\"调用执行状态\",\"enum\":[\"ok\",\"error\",\"timeout\",\"cancelled\"]}"];
+  optional Observation observation = 3 [json_name = "observation", (required) = true];
+  optional bool output_truncated = 4 [json_name = "output_truncated", (required) = true, (field_rule) = "{\"description\":\"输出预览是否裁剪\"}"];
+  optional ArtifactRef raw_output_ref = 5 [json_name = "raw_output_ref"];
+  optional ErrorRecord error = 6 [json_name = "error"];
+}

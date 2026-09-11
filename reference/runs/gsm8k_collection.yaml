@@ -1,9 +1,10 @@
 run_id: demo-gsm8k_collection
 purpose: trajectory_collection
-environment:
-  implementation:
-    id: datasets/gsm8k
-    version: 1.0.0
+dataset_package:
+  id: datasets/gsm8k
+  version: 1.0.0
+scoring:
+  enabled: false
 agent:
   implementation:
     id: agents/plain
@@ -24,5 +25,4 @@ limits:
   finalize_reserve_ms: 120000
   max_generations: 1
   max_tool_calls: 0
-  max_environment_steps: 0
   max_total_output_tokens: 32768

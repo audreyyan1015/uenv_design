@@ -24,7 +24,7 @@ for package_source in sorted((ROOT / "reference/datasets").glob("*/src")):
 
 from jsonschema import Draft202012Validator, ValidationError
 from package_loader import build_manifest, discover_packages, expand_run, load_package, load_yaml, validate_author_package
-from uenv.sdk import AgentRuntimeError, Observation, AgentContext, DatasetAdapter, Environment, EnvironmentContext, Outcome, ScoreInput, ScoreResult, Scorer, ScoringContext, ToolExecutor, UEnvModel, model_from_envelope, model_json_schema, task_from_wire, text_part, to_wire
+from uenv.sdk import AgentRuntimeError, Observation, AgentContext, DatasetAdapter, Environment, EnvironmentContext, ScoreInput, ScoreResult, Scorer, ScoringContext, ToolExecutor, UEnvModel, model_from_envelope, model_json_schema, task_from_wire, text_part, to_wire
 from uenv.sdk.schema_registry import SchemaRegistry, canonical_bytes
 from gsm8k.scorer import Gsm8kScorer
 from olymmath.scorer import OlymmathScorer
@@ -60,7 +60,7 @@ def component_private_data(name):
     return model_from_envelope(PACKAGES[name]["private_data_model"], value)
 
 
-class MemoryArtifacts:
+class MemoryFileStore:
     """Test-only artifact helper; production storage is a Rust port."""
 
     def __init__(self):
@@ -81,8 +81,8 @@ def score_candidate(scorer, answer, private_data, context=None):
         private_data = PACKAGES[dataset_name]["private_data_model"](**private_data)
     request = ScoreInput(
         component_task(dataset_name),
-        Outcome([text_part(answer)], termination_reason="final_answer"),
-        MemoryArtifacts().put_json([]),
+        [text_part(answer)],
+        MemoryFileStore().put_json([]),
         private_data=private_data,
     )
     candidate = scorer.score(
@@ -99,6 +99,144 @@ def score_candidate(scorer, answer, private_data, context=None):
 
 
 class ContractTests(unittest.TestCase):
+    def test_process_scorer_reads_verified_generation_records(self):
+        from dataclasses import replace
+        from examples.generation_scoring import ExactAnswerProcessScorer
+        from uenv.sdk import read_scoring_trajectory
+        store = MemoryFileStore()
+        identity = {"run_id": "run", "episode_id": "episode", "attempt_id": 1, "task_id": component_task("gsm8k").task_id}
+        events = []
+        for i, answer in enumerate(["4", "5"]):
+            events.append({"schema_version": "vnext.3", **identity, "event_id": f"event-{i}",
+                "sequence": i, "occurred_at_ms": 0, "kind": "generation", "payload": {
+                    "generation_id": f"g{i}", "model_id": "test", "source": "simulated", "messages": [],
+                    "response": [text_part(answer)], "output_token_count": 1, "finish_reason": "stop", "duration_ms": 0}})
+        content = b"".join(canonical_bytes(event) + b"\n" for event in events)
+        digest = "sha256:" + hashlib.sha256(content).hexdigest()
+        segment = {"uri": "memory://" + digest, "digest": digest, "size_bytes": len(content), "media_type": "application/x-ndjson"}
+        store.objects[segment["uri"]] = content
+        manifest = {"schema_version": "vnext.3", **identity, "event_segments": [segment],
+            "event_count": 2, "trajectory_status": "scoring_checkpoint", "created_at_ms": 0}
+        request = ScoreInput(component_task("gsm8k"), [text_part("5")], store.put_json(manifest),
+            private_data=component_private_data("gsm8k"))
+        context = ScoringContext(deadline=time.monotonic()+10, registry=REGISTRY, cancelled=lambda: False,
+            read_artifact=lambda ref: store.objects[ref["uri"]])
+        result = ExactAnswerProcessScorer({}).score(request, context)
+        self.assertEqual(result.reward, 1.0)
+        self.assertEqual(result.generation_rewards, [{"generation_id":"g0", "reward":0.0}, {"generation_id":"g1", "reward":1.0}])
+        wire = to_wire(result)
+        wire.update(status="ok", scorer=generated("gsm8k", "execution_plan.json")["dataset_package"])
+        validate("ScoreResult", wire)
+        invalid = copy.deepcopy(wire)
+        invalid["generation_rewards"][0]["reward"] = None
+        with self.assertRaises(ValidationError): validate("ScoreResult", invalid)
+        invalid["generation_rewards"][0]["reward"] = float("nan")
+        with self.assertRaises(ValueError): validate("ScoreResult", invalid)
+        manifest["event_count"] = 3
+        request = replace(request, trajectory_ref=store.put_json(manifest))
+        with self.assertRaisesRegex(ValueError, "count mismatch"): read_scoring_trajectory(request, context)
+        manifest["event_count"] = 2
+        manifest["attempt_id"] = 2
+        request = replace(request, trajectory_ref=store.put_json(manifest))
+        with self.assertRaisesRegex(ValueError, "identity mismatch"): read_scoring_trajectory(request, context)
+        manifest["attempt_id"] = 1
+        request = replace(request, trajectory_ref=store.put_json(manifest))
+        store.objects[segment["uri"]] = b"tampered"
+        with self.assertRaisesRegex(ValueError, "integrity mismatch"): read_scoring_trajectory(request, context)
+
+
+    def test_yaml_rejects_duplicate_configuration_keys(self):
+        for content in ["limits: {}\nlimits: {}\n", "limits:\n  max_generations: 1\n  max_generations: 2\n"]:
+            with tempfile.TemporaryDirectory(prefix="uenv-yaml-") as folder:
+                path = Path(folder) / "run.yaml"
+                path.write_text(content, encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Duplicate YAML key"):
+                    load_yaml(path)
+
+    def test_dataset_package_is_the_only_role_selection(self):
+        from fixture_plan import fixture_plan
+        manifest = load(GENERATED_ROOT / "packages/gsm8k/manifest.json")
+        public = load_yaml(ROOT / "reference/runs/gsm8k.yaml")
+        run = expand_run(public, [manifest], CATALOG)
+        plan = fixture_plan(generated("gsm8k", "episode_request.json"), run, [manifest], REGISTRY, CATALOG)
+        self.assertEqual(plan["dataset_package"]["id"], public["dataset_package"]["id"])
+        self.assertNotIn("implementation", plan["environment"])
+        self.assertNotIn("scorer", plan)
+        for field in ("scorer", "environment", "scoring"):
+            invalid = copy.deepcopy(public)
+            selection = {"implementation": {"id": "other/package", "version": "2.0.0"}}
+            if field == "scoring":
+                invalid[field].update(selection)
+            else:
+                invalid[field] = selection
+            with self.assertRaises((ValueError, ValidationError)):
+                expand_run(invalid, [manifest], CATALOG)
+        for enabled in (None, "false", 0):
+            invalid = copy.deepcopy(public)
+            invalid["scoring"]["enabled"] = enabled
+            with self.assertRaises(ValueError):
+                expand_run(invalid, [manifest], CATALOG)
+        unscored = load_yaml(ROOT / "reference/runs/gsm8k_collection.yaml")
+        unscored["scoring"]["config"] = {}
+        with self.assertRaisesRegex(ValueError, "forbidden"):
+            expand_run(unscored, [manifest], CATALOG)
+
+    def test_one_run_selects_python_and_native_tools_with_early_compatibility_checks(self):
+        public = load_yaml(ROOT / 'reference/runs/gsm8k.yaml')
+        public['agent'] = {'implementation':{'id':'agents/openhands','version':'1.0.0'}}
+        public['tools'] = [
+            {'name':'terminal','implementation':{'id':'agents/openhands/tools/terminal','version':'1.0.0'}},
+            {'name':'echo','implementation':{'id':'tools/echo','version':'1.0.0'}},
+        ]
+        catalog = copy.deepcopy(CATALOG)
+        catalog['components']['tools/echo'] = {'role':'tool','version':'1.0.0',
+            'config_schema':'uenv://schemas/vnext/EmptyConfig', 'execution_scope':'sandbox',
+            'required_capabilities':[]}
+        manifests = [load(GENERATED_ROOT / 'packages/gsm8k/manifest.json')]
+        result = expand_run(public, manifests, catalog)
+        self.assertEqual([v['name'] for v in result['tools']], ['terminal','echo'])
+        wrong = copy.deepcopy(public)
+        wrong['agent']['implementation']['id'] = 'agents/plain'
+        with self.assertRaisesRegex(ValueError, 'NATIVE_TOOL_AGENT_MISMATCH'):
+            expand_run(wrong, manifests, catalog)
+        wrong = copy.deepcopy(public)
+        wrong['tools'][0]['implementation']['version'] = '2'
+        with self.assertRaisesRegex(ValueError, 'NATIVE_TOOL_VERSION_MISMATCH'):
+            expand_run(wrong, manifests, catalog)
+        wrong = copy.deepcopy(public)
+        wrong['tools'][1]['name'] = 'terminal'
+        with self.assertRaisesRegex(ValueError, 'DUPLICATE_TOOL_NAME'):
+            expand_run(wrong, manifests, catalog)
+        wrong = copy.deepcopy(public)
+        wrong['agent']['config'] = {'tools':['hidden']}
+        with self.assertRaises(ValidationError): expand_run(wrong, manifests, catalog)
+
+    def test_dataset_tool_publishes_schema_from_function_without_duplicate_yaml(self):
+        from uenv.sdk import tool
+        from package_loader import lookup_tool
+        @tool
+        def add(left: int, right: int) -> int:
+            return left + right
+        package = {**PACKAGES['gsm8k'], 'tools':{'add':add}}
+        with tempfile.TemporaryDirectory(prefix='uenv-tool-package-') as folder:
+            output = Path(folder) / 'generated/packages/gsm8k'
+            manifest = build_manifest(package, output)
+            validate('PackageManifest', manifest)
+            spec = manifest['provided_tools'][0]
+            self.assertEqual(spec['implementation']['id'], 'datasets/gsm8k/tools/add')
+            self.assertEqual(set(load(output / 'schemas/add.input.schema.json')['properties']), {'left','right'})
+            definition = lookup_tool(CATALOG, spec['implementation'], {'id':'agents/plain','version':'1.0.0'}, [manifest])
+            self.assertNotIn('native_agent', definition)
+            self.assertNotIn('interfaces', spec)
+
+    def test_unregistered_component_versions_are_rejected(self):
+        manifest = load(GENERATED_ROOT / "packages/gsm8k/manifest.json")
+        for role in ("agent", "backend"):
+            public = load_yaml(ROOT / "reference/runs/gsm8k.yaml")
+            public[role]["implementation"]["version"] = "999.0.0"
+            with self.assertRaisesRegex(ValueError, "Unknown"):
+                expand_run(public, [manifest], CATALOG)
+
     def test_contract_authoring_sources_are_unambiguous(self):
         template = (ROOT / "docs/guides/dataset_package_template.md").read_text(encoding="utf-8")
         module_map = (ROOT / "docs/generated/module_map.md").read_text(encoding="utf-8")
@@ -174,7 +312,7 @@ class ContractTests(unittest.TestCase):
                 self.assertNotIn("schema_version", manifest)
                 self.assertNotIn("schema_ref", json.dumps(public_run))
                 self.assertNotIn("schema_version", public_run)
-                self.assertEqual(expand_run(public_run, manifest, CATALOG), run)
+                self.assertEqual(expand_run(public_run, [manifest], CATALOG), run)
                 self.assertFalse((package / "manifest.json").exists())
                 self.assertFalse((package / "episode_request.json").exists())
                 self.assertFalse((package / "execution_plan.json").exists())
@@ -216,6 +354,7 @@ class ContractTests(unittest.TestCase):
                 self.assertTrue((package_dir / "tests/test_contract.py").exists())
                 self.assertEqual(set(declaration["entrypoints"]), {"dataset_adapter", "environment", "scorer"})
                 self.assertEqual(set(declaration["models"]), {"input", "private_data"})
+                self.assertNotIn('action', declaration['models'])
                 self.assertNotIn(PACKAGES[package_dir.name]["input_model"].__name__, central_contract_source)
                 self.assertNotIn(PACKAGES[package_dir.name]["private_data_model"].__name__, central_contract_source)
                 self.assertNotIn(package_dir.name, generic_builder_source)
@@ -233,6 +372,17 @@ class ContractTests(unittest.TestCase):
                 if name.startswith("swe_") and role == "input":
                     self.assertNotIn("variant", actual["properties"])
 
+    def test_no_duplicate_environment_action_interface(self):
+        class LegacyEnvironment(Environment):
+            def reset(self, task, context): return Observation()
+            def step(self, action, context): return Observation()
+        with self.assertRaisesRegex(ValueError, 'tools.py'):
+            validate_author_package({**PACKAGES['gsm8k'], 'environment': LegacyEnvironment})
+        for name in PACKAGES:
+            self.assertNotIn('action_schema', load(GENERATED_ROOT / 'packages' / name / 'manifest.json'))
+        self.assertNotIn('AnswerAction', SCHEMA['$defs'])
+
+
     def test_package_validation_distinguishes_errors_from_semantic_warnings(self):
         class DuplicateTimeout(UEnvModel):
             timeout: int
@@ -247,6 +397,45 @@ class ContractTests(unittest.TestCase):
         warnings = validate_author_package({"declaration": declaration, "input_model": SuspectAllowedTime})
         self.assertEqual(len(warnings), 1)
         self.assertIn("cannot determine semantic equivalence", warnings[0])
+
+    def test_package_config_and_nested_models_cannot_shadow_execution_limits(self):
+        class DuplicateBudget(UEnvModel):
+            max_generations: int
+        class NestedConfig(UEnvModel):
+            options: list[DuplicateBudget]
+        class SuspectConfig(UEnvModel):
+            allowed_time: int
+        class Weather(UEnvModel):
+            temperature: float
+        declaration = PACKAGES["gsm8k"]["declaration"]
+        for role in ("environment_config", "scorer_config", "observation", "state"):
+            with self.subTest(role=role), self.assertRaisesRegex(ValueError, "max_generations"):
+                validate_author_package({"declaration": declaration, role + "_model": NestedConfig})
+        warnings = validate_author_package({"declaration": declaration, "environment_config_model": SuspectConfig})
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(validate_author_package({"declaration": declaration, "input_model": Weather}), [])
+
+    def test_package_entrypoints_reject_nonclasses_abstract_and_indirect_classes(self):
+        declaration = PACKAGES["gsm8k"]["declaration"]
+        class IndirectEnvironment(PACKAGES["gsm8k"]["environment"]):
+            pass
+        for value in (lambda: None, Environment, IndirectEnvironment):
+            with self.subTest(value=value), self.assertRaisesRegex(TypeError, "concrete direct subclass"):
+                validate_author_package({"declaration": declaration, "environment": value})
+        with tempfile.TemporaryDirectory(prefix="uenv-contract-") as folder:
+            package_dir = Path(folder) / "author"
+            shutil.copytree(PACKAGE_ROOT / "gsm8k", package_dir,
+                            ignore=shutil.ignore_patterns("tests", "__pycache__"))
+            declaration = copy.deepcopy(declaration)
+            declaration["entrypoints"]["environment"] = "extension_templates:BorrowedEnvironment"
+            module = importlib.import_module("extension_templates")
+            module.BorrowedEnvironment = PACKAGES["gsm8k"]["environment"]
+            try:
+                (package_dir / "dataset.yaml").write_text(json.dumps(declaration), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "not an alias"):
+                    load_package(package_dir)
+            finally:
+                del module.BorrowedEnvironment
 
     def test_each_dataset_owns_three_direct_subclasses(self):
         prefixes = {"gsm8k": "Gsm8k", "pubmedqa": "Pubmedqa", "scitab": "Scitab", "olymmath": "Olymmath", "dscodebench": "Dscodebench", "swe_verified": "SweVerified", "swe_lite": "SweLite", "swe_pro": "SwePro", "swe_smith": "SweSmith"}
@@ -276,7 +465,7 @@ class ContractTests(unittest.TestCase):
                 component_task(package.name),
                 EnvironmentContext(
                     REGISTRY,
-                    MemoryArtifacts(),
+                    MemoryFileStore(),
                     cancelled=lambda: False,
                     deadline=time.monotonic() + 120,
                     seed=0,
@@ -322,11 +511,11 @@ class ContractTests(unittest.TestCase):
         public_run = load_yaml(ROOT / "reference/runs/gsm8k.yaml")
         public_run["schema_version"] = "vnext.3"
         with self.assertRaisesRegex(ValueError, "schema_version is generated"):
-            expand_run(public_run, manifest, CATALOG)
+            expand_run(public_run, [manifest], CATALOG)
         public_run.pop("schema_version")
-        public_run["scorer"]["implementation"]["version"] = "2.0.0"
-        with self.assertRaisesRegex(ValueError, "No registered manifest"):
-            expand_run(public_run, manifest, CATALOG)
+        public_run["dataset_package"]["version"] = "2.0.0"
+        with self.assertRaisesRegex(ValueError, "Expected one registered manifest"):
+            expand_run(public_run, [manifest], CATALOG)
 
     def test_package_can_publish_without_tests_and_rejects_version_drift(self):
         with tempfile.TemporaryDirectory(prefix="uenv-contract-") as folder:
@@ -379,21 +568,22 @@ class ContractTests(unittest.TestCase):
             validate_author_package({"declaration": PACKAGES["gsm8k"]["declaration"], "input_model": BadInput})
 
     def test_declared_config_and_interaction_models_are_published(self):
-        from uenv.sdk import Observation
+        from uenv.sdk import Observation, structured_part
+
+        class CustomObservation(UEnvModel):
+            remaining: int
 
         class CustomConfig(UEnvModel):
             prefix: str = "Question: "
 
-        class CustomAction(UEnvModel):
-            increment: int
-
         class ConfiguredEnvironment(Environment):
             def reset(self, task, context):
-                return Observation([text_part(self.config["prefix"] + task.input.instruction)])
+                return Observation([text_part(self.config["prefix"] + task.input.instruction),
+                                    structured_part(CustomObservation(remaining=2))])
 
         package = {**PACKAGES["gsm8k"], "declaration": copy.deepcopy(PACKAGES["gsm8k"]["declaration"])}
-        package["declaration"]["models"].update(environment_config="test:CustomConfig", action="test:CustomAction")
-        package.update(environment_config_model=CustomConfig, action_model=CustomAction)
+        package["declaration"]["models"].update(environment_config="test:CustomConfig", observation="test:CustomObservation")
+        package.update(environment_config_model=CustomConfig, observation_model=CustomObservation, environment=ConfiguredEnvironment)
         with tempfile.TemporaryDirectory(prefix="uenv-contract-") as folder:
             output = Path(folder) / "generated/packages/gsm8k"
             manifest = build_manifest(package, output)
@@ -402,17 +592,18 @@ class ContractTests(unittest.TestCase):
                 registry.register(load(path))
             registry.validate("PackageManifest", manifest)
             public_run = load_yaml(ROOT / "reference/runs/gsm8k.yaml")
-            public_run["environment"]["config"] = {"prefix": "Question: "}
-            run = expand_run(public_run, manifest, CATALOG, registry)
-            public_run["environment"].pop("config")
-            self.assertEqual(expand_run(public_run, manifest, CATALOG, registry), run)
+            public_run["environment"] = {"prefix": "Question: "}
+            run = expand_run(public_run, [manifest], CATALOG, registry)
+            public_run.pop("environment")
+            self.assertEqual(expand_run(public_run, [manifest], CATALOG, registry), run)
             registry.validate("RunSpec", run)
-            environment = ConfiguredEnvironment(run["environment"]["config"]["data"])
+            environment = ConfiguredEnvironment(run["environment"]["data"])
             observation = environment.reset(component_task("gsm8k"), None)
             self.assertEqual(observation.content[0]["text"], "Question: " + component_task("gsm8k").input.instruction)
             registry.validate("Observation", to_wire(observation))
-            self.assertTrue((output / "schemas/CustomAction.schema.json").exists())
-            run["environment"]["config"]["data"]["prefix"] = 42
+            self.assertTrue((output / "schemas/CustomObservation.schema.json").exists())
+            self.assertEqual(observation.content[1]['structured']['data'], {'remaining': 2})
+            run["environment"]["data"]["prefix"] = 42
             with self.assertRaises(ValidationError):
                 registry.validate("RunSpec", run)
 
@@ -422,20 +613,22 @@ class ContractTests(unittest.TestCase):
                 manifest = load(GENERATED_ROOT / "packages" / name / "manifest.json")
                 public = load_yaml(ROOT / "reference/runs" / f"{name}.yaml")
                 before = copy.deepcopy(public)
-                expanded = expand_run(public, manifest, CATALOG)
+                expanded = expand_run(public, [manifest], CATALOG)
                 self.assertEqual(public, before)
                 explicit = copy.deepcopy(expanded)
                 explicit.pop("schema_version")
-                for role in ("environment", "agent", "scorer", "backend"):
+                explicit["environment"] = explicit["environment"]["data"]
+                explicit["scoring"]["config"] = explicit["scoring"]["config"]["data"]
+                for role in ("agent", "backend"):
                     explicit[role]["config"] = explicit[role]["config"]["data"]
                 for tool in explicit["tools"]:
                     tool["config"] = tool["config"]["data"]
-                self.assertEqual(expand_run(explicit, manifest, CATALOG), expanded)
+                self.assertEqual(expand_run(explicit, [manifest], CATALOG), expanded)
                 explicit["model"]["generation"]["temperature"] = 0.5
                 explicit["model"]["max_transport_retries"] = 0
                 explicit["limits"]["max_tool_calls"] = 0
                 explicit["retry"]["max_attempts"] = 2
-                changed = expand_run(explicit, manifest, CATALOG)
+                changed = expand_run(explicit, [manifest], CATALOG)
                 self.assertEqual(changed["model"]["generation"]["temperature"], 0.5)
                 self.assertEqual(changed["model"]["max_transport_retries"], 0)
                 self.assertEqual(changed["limits"]["max_tool_calls"], 0)
@@ -451,14 +644,17 @@ class ContractTests(unittest.TestCase):
                              ("backend", {"runtime_profile": "legacy"}),
                              ("agent", None)):
             changed = copy.deepcopy(baseline)
-            changed[role]["config"] = config
+            if role == "environment":
+                changed[role] = config
+            else:
+                changed[role]["config"] = config
             with self.subTest(role=role, config=config), self.assertRaises(ValidationError):
-                expand_run(changed, manifest, CATALOG)
+                expand_run(changed, [manifest], CATALOG)
         for value in (None, False, -1, "0.5"):
             changed = copy.deepcopy(baseline)
             changed["model"]["generation"] = {"temperature": value}
             with self.subTest(temperature=value), self.assertRaises(ValidationError):
-                expand_run(changed, manifest, CATALOG)
+                expand_run(changed, [manifest], CATALOG)
 
     def test_wire_validation_does_not_apply_submission_defaults(self):
         run = generated("gsm8k", "run_spec.json")
@@ -493,17 +689,17 @@ class ContractTests(unittest.TestCase):
             validate("BatchRequest", batch)
             validate("ExecutionPlan", plan)
             self.assertEqual(batch["run_spec"]["purpose"], "trajectory_collection")
-            self.assertEqual("scorer" in plan, scored)
+            self.assertEqual(plan["scoring"]["enabled"], scored)
             self.assertEqual("private_data" in plan, scored)
             self.assertNotIn("training", plan)
             for invalid_purpose in ("evaluation", "training"):
                 invalid = copy.deepcopy(batch["run_spec"])
                 invalid["purpose"] = invalid_purpose
-                invalid.pop("scorer", None)
+                invalid["scoring"] = {"enabled": False}
                 with self.assertRaises(ValidationError):
                     validate("RunSpec", invalid)
             invalid = copy.deepcopy(plan)
-            invalid["scorer"] = None
+            invalid["scoring"] = None
             with self.assertRaises(ValidationError):
                 validate("ExecutionPlan", invalid)
             invalid = copy.deepcopy(batch["run_spec"])
@@ -532,11 +728,11 @@ class ContractTests(unittest.TestCase):
             self.assertNotIn("scorer", manifest["config_schemas"])
             self.assertNotIn("private_schema", manifest)
             public = load_yaml(ROOT / "reference/runs/gsm8k_collection.yaml")
-            run = expand_run(public, manifest, CATALOG)
+            run = expand_run(public, [manifest], CATALOG)
             validate("RunSpec", run)
-            public["scorer"] = copy.deepcopy(public["environment"])
-            with self.assertRaisesRegex(ValueError, "does not provide scorer"):
-                expand_run(public, manifest, CATALOG)
+            public["scoring"]["enabled"] = True
+            with self.assertRaisesRegex(ValueError, "Expected one registered manifest for selected scorer"):
+                expand_run(public, [manifest], CATALOG)
             invalid = copy.deepcopy(manifest)
             invalid["config_schemas"]["scorer"] = "uenv://schemas/vnext/EmptyConfig"
             with self.assertRaises(ValidationError):
@@ -569,17 +765,20 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(list(defs["EpisodeRequest"]["properties"]).count("private_data"), 1)
         self.assertEqual(list(defs["ExecutionPlan"]["properties"]).count("runtime"), 1)
         self.assertEqual(list(defs["EpisodeResult"]["properties"]).count("score"), 1)
-        self.assertEqual(set(defs["ScoreResult"]["properties"]), {"status", "success", "metrics", "reward", "evidence", "scorer", "error"})
-        self.assertEqual(set(defs["EnvironmentTransition"]["properties"]), {"environment_step_index", "observation_before", "action", "transition"})
+        self.assertEqual(set(defs["ScoreResult"]["properties"]), {"status", "success", "metrics", "reward", "evidence", "scorer", "error", "generation_rewards"})
+        self.assertNotIn("EnvironmentTransition", defs)
         self.assertEqual(set(defs["ToolBinding"]["properties"]), {"name", "implementation", "config"})
-        self.assertIn("adapter", defs["ResolvedToolBinding"]["properties"])
-        self.assertIn("interface", defs["ResolvedToolBinding"]["properties"])
-        self.assertIn("termination_reason", defs["Outcome"]["properties"])
+        self.assertNotIn("adapter", defs["ResolvedToolBinding"]["properties"])
+        self.assertNotIn("interface", defs["ResolvedToolBinding"]["properties"])
+        self.assertNotIn("EpisodeOutput", defs)
         self.assertEqual(
-            defs["Outcome"]["properties"]["termination_reason"]["enum"],
-            ["in_progress", "final_answer", "environment_terminal", "budget_exhausted"],
+            defs["EpisodeResult"]["properties"]["termination_reason"]["enum"],
+            ["final_answer", "environment_terminal", "environment_truncated", "budget_exhausted"],
         )
-        self.assertNotIn("termination_reason", defs["EpisodeResult"]["properties"])
+        self.assertNotIn("outcome", defs["EpisodeResult"]["properties"])
+        self.assertNotIn("state", defs["EpisodeResult"]["properties"])
+        self.assertEqual(set(defs["ScoreInput"]["properties"]),
+                         {"task", "final_answer", "trajectory_ref", "state", "private_data"})
         self.assertNotIn("termination_reason", defs["TerminalEvent"]["properties"])
         self.assertNotIn("remaining_timeout_ms", defs["ScoreInput"]["properties"])
         self.assertEqual(set(defs["StateEvent"]["properties"]), {"phase", "session"})
@@ -630,16 +829,64 @@ class ContractTests(unittest.TestCase):
             {"batch_id", "episode_ids"},
         )
 
-    def test_agent_and_tool_publish_common_interfaces(self):
+    def test_observation_content_unifies_typed_text_and_file_items(self):
+        from examples.counter_environment import CounterState, register_schemas
+        from uenv.sdk import structured_part
+        registry = SchemaRegistry.bundled()
+        register_schemas(registry)
+        model = CounterState(value=2, goal=5)
+        part = structured_part(model)
+        reference = MemoryFileStore().put_json({'image': 'fixture'})
+        observation = Observation([text_part('Position'),
+                                   {'kind': 'artifact', 'artifact': reference}, part])
+        wire = to_wire(observation)
+        self.assertEqual(set(wire), {'content', 'terminated', 'episode_truncated'})
+        registry.validate('Observation', wire)
+        registry.validate('Message', {'role': 'user', 'content': wire['content']})
+        restored = model_from_envelope(CounterState, part['structured'])
+        self.assertEqual(restored.value, 2)
+        model.value = 99
+        self.assertEqual(part['structured']['data']['value'], 2)
+        with self.assertRaises(TypeError):
+            Observation(content=[], data=model)
+        with self.assertRaises(TypeError):
+            structured_part({'value': 2})
+        with self.assertRaises(ValidationError):
+            registry.validate('Observation', dict(wire, data=part['structured']))
+        invalids = [
+            {'kind': 'structured'},
+            {**part, 'text': 'duplicate'},
+            {'kind': 'text', 'text': 'x', 'structured': part['structured']},
+            {'kind': 'structured', 'structured': {'schema_ref': 'unknown', 'data': {}}},
+            {'kind': 'structured', 'structured': {'schema_ref': part['structured']['schema_ref'],
+                                                'data': {'value': -1, 'goal': 5}}},
+            {'kind': 'structured', 'structured': {'schema_ref': part['structured']['schema_ref'],
+                                                'data': {'value': '2', 'goal': 5}}},
+        ]
+        for invalid in invalids:
+            with self.subTest(part=invalid), self.assertRaises(ValidationError):
+                registry.validate('Observation', {**wire, 'content': [invalid]})
+
+    def test_tool_result_structured_data_uses_registered_schema(self):
+        result = {"tool_call_id":"call-1", "status":"ok", "observation":to_wire(Observation()), "output_truncated":False}
+        validate("ToolResult", result)
+        result["observation"]["content"] = [{"kind":"structured", "structured":{
+            "schema_ref":"uenv://schemas/vnext/EmptyConfig", "data":{}}}]
+        validate("ToolResult", result)
+        result["observation"]["content"][0]["structured"]["data"]["undeclared"] = True
+        with self.assertRaises(ValidationError): validate("ToolResult", result)
+        self.assertNotIn("data", SCHEMA["$defs"]["ToolResult"]["properties"])
+
+
+    def test_agent_exports_native_tools_without_interface_negotiation(self):
         defs = SCHEMA["$defs"]
         component = {"id": "agents/example", "version": "1.0.0"}
-        adapter = {"id": "adapters/python-mcp", "version": "1.0.0"}
-        artifact = MemoryArtifacts().put_json({"type": "object"})
+        artifact = MemoryFileStore().put_json({"type": "object"})
         validate("AgentManifest", {
             "implementation": component,
             "entrypoint": "example.agent:ExampleAgent",
             "config_schema": "uenv://schemas/vnext/EmptyConfig",
-            "supported_interfaces": ["mcp.v1"],
+            "provided_tools": [],
             "required_tool_names": [],
         })
         validate("ToolSpec", {
@@ -647,12 +894,8 @@ class ContractTests(unittest.TestCase):
             "entrypoint": "example.tool:execute",
             "config_schema": "uenv://schemas/vnext/EmptyConfig",
             "description": "Example tool",
-            "interfaces": [{
-                "interface": "mcp.v1",
-                "adapter": adapter,
-                "execution_scope": "sandbox",
-                "required_capabilities": [],
-            }],
+            "execution_scope": "sandbox",
+            "required_capabilities": [],
             "input_schema": artifact,
             "output_schema": artifact,
             "side_effect": "read_only",
@@ -728,7 +971,7 @@ class ContractTests(unittest.TestCase):
         call = {
             "tool_call_id": "c1", "generation_id": "g1", "name": "lookup",
             "implementation": {"id": "tools/lookup", "version": "1", "digest": "sha256:" + "0" * 64},
-            "arguments": {"schema_ref": "uenv://schemas/vnext/EmptyConfig", "data": {}},
+            "arguments": {},
             "timeout_ms": 1000,
         }
         event = {"generation_id": "g1", "model_id": "test", "source": "simulated",
@@ -757,22 +1000,29 @@ class ContractTests(unittest.TestCase):
 
 class PlainAgentContextProbe(AgentContext):
     """Deterministic SDK-side probe; Rust tests independently check real budgets."""
-    def __init__(self, finishes, max_generations=10, tool_error=False, denied=None):
+    def __init__(self, finishes, max_generations=10, tool_error=False, denied=None,
+                 terminate_after=1, max_steps=10, terminal_tool=False):
         self.observation = Observation([text_part("Task")])
         self.tools = ()
+        self.registry = REGISTRY
         self.finishes = finishes
         self.max_generations = max_generations
         self.tool_error = tool_error
         self.denied = denied
         self.requests = []
         self.calls = []
+        self.actions = []
+        self.parsed = []
+        self.terminate_after = terminate_after
+        self.max_steps = max_steps
+        self.terminal_tool = terminal_tool
 
     async def generate(self, messages):
         if self.denied:
             raise AgentRuntimeError({"code": self.denied})
         if len(self.requests) >= self.max_generations:
             raise AgentRuntimeError({"code": "GENERATION_LIMIT"})
-        validate("Message", messages[-1])
+        self.registry.validate("Message", messages[-1])
         self.requests.append(copy.deepcopy(messages))
         index = len(self.requests)
         reason = self.finishes[index - 1]
@@ -785,27 +1035,49 @@ class PlainAgentContextProbe(AgentContext):
             event["tool_calls"] = [{
                 "tool_call_id": f"call{index}", "generation_id": f"g{index}", "name": "lookup",
                 "implementation": {"id": "tools/lookup", "version": "1", "digest": "sha256:" + "0" * 64},
-                "arguments": {"schema_ref": "uenv://schemas/vnext/EmptyConfig", "data": {}},
+                "arguments": {},
                 "timeout_ms": 1000,
             }]
-        validate("GenerationEvent", event)
+        self.registry.validate("GenerationEvent", event)
         return event
 
     async def call_tool(self, call):
         self.calls.append(copy.deepcopy(call))
-        result = {"tool_call_id": call["tool_call_id"], "status": "ok",
-                  "content": [text_part("tool output")], "output_truncated": False}
+        self.observation = Observation([text_part("tool output")], terminated=self.terminal_tool)
+        result = {"tool_call_id":call["tool_call_id"], "status":"ok",
+                  "observation":to_wire(self.observation), "output_truncated":False}
         if self.tool_error:
-            result.update(status="error", error={"code": "LOOKUP_FAILED", "phase": "tool",
-                "message": "lookup failed", "retryable": False})
+            result.update(status="error", error={"code":"LOOKUP_FAILED", "phase":"tool",
+                "message":"lookup failed", "retryable":False})
+        if self.tool_error:
+            result['observation']['content'].append(text_part('Tool error: LOOKUP_FAILED'))
         validate("ToolResult", result)
-        return result
-
-    async def step(self, action):
-        raise AssertionError("PlainAgent must not invent environment actions")
+        self.observation = Observation(**result['observation'])
+        return self.observation
 
 
 class PlainAgentTests(unittest.IsolatedAsyncioTestCase):
+    async def test_reset_end_flags_stop_without_generation_and_use_flat_observation(self):
+        for terminated, truncated, reason in [
+            (True, False, 'environment_terminal'),
+            (False, True, 'budget_exhausted'),
+        ]:
+            context = PlainAgentContextProbe([])
+            context.observation = Observation(
+                [text_part('already stopped')], terminated=terminated,
+                episode_truncated=truncated,
+            )
+            wire = to_wire(context.observation)
+            validate('Observation', wire)
+            self.assertNotIn('observation', wire)
+            with self.assertRaises(ValidationError):
+                validate('Observation', {'observation': wire, 'terminated': terminated,
+                                         'episode_truncated': truncated})
+            final_answer = await self.agent().run(context)
+            self.assertEqual(final_answer, [])
+            self.assertEqual(context.requests, [])
+            self.assertEqual(context.actions, [])
+
     def agent(self, history="full"):
         from extension_templates import PlainAgent
         return PlainAgent({"history_policy": history, "system_prompt": "System"})
@@ -813,8 +1085,8 @@ class PlainAgentTests(unittest.IsolatedAsyncioTestCase):
     async def test_tool_feedback_drives_multiple_generations_with_complete_history(self):
         context = PlainAgentContextProbe(["tool_calls", "tool_calls", "stop"])
         result = await self.agent().run(context)
-        self.assertEqual(result.text, "response3")
-        self.assertEqual(result.termination_reason, "final_answer")
+        self.assertEqual(''.join(part['text'] for part in result), "response3")
+        self.assertFalse(context.observation.terminated)
         self.assertEqual(len(context.requests), 3)
         self.assertEqual(len(context.calls), 2)
         self.assertEqual([len(messages) for messages in context.requests], [2, 4, 6])
@@ -835,25 +1107,90 @@ class PlainAgentTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cap, 1)
         context = PlainAgentContextProbe(["tool_calls"], max_generations=cap)
         result = await self.agent().run(context)
-        self.assertEqual(result.termination_reason, "budget_exhausted")
+        self.assertIsInstance(result, list)
         self.assertEqual(len(context.requests), 1)
         self.assertEqual(len(context.calls), 1)
         early = PlainAgentContextProbe(["stop"], max_generations=10)
-        self.assertEqual((await self.agent().run(early)).termination_reason, "final_answer")
+        self.assertEqual(await self.agent().run(early), [text_part("response1")])
         self.assertEqual(len(early.requests), 1)
 
     async def test_tool_error_is_feedback_but_runtime_failure_is_not_a_budget_end(self):
         context = PlainAgentContextProbe(["tool_calls", "stop"], tool_error=True)
         result = await self.agent().run(context)
-        self.assertEqual(result.text, "response2")
+        self.assertEqual(''.join(part['text'] for part in result), "response2")
         self.assertIn("LOOKUP_FAILED", json.dumps(context.requests[1][-1]))
         for code in ("EPISODE_CANCELLED", "MODEL_NETWORK_FAILED", "TOOL_NOT_SELECTED"):
             with self.subTest(code=code), self.assertRaises(AgentRuntimeError):
                 await self.agent().run(PlainAgentContextProbe([], denied=code))
         partial = PlainAgentContextProbe(["length"])
-        outcome = await self.agent().run(partial)
-        self.assertEqual(outcome.text, "response1")
-        self.assertEqual(outcome.termination_reason, "budget_exhausted")
+        final_answer = await self.agent().run(partial)
+        self.assertEqual(''.join(part['text'] for part in final_answer), "response1")
+        self.assertEqual(final_answer, [text_part("response1")])
+
+    async def test_final_answer_does_not_require_environment_action(self):
+        context = PlainAgentContextProbe(['stop'])
+        self.assertEqual(await self.agent().run(context), [text_part('response1')])
+        self.assertEqual(context.calls, [])
+        self.assertEqual(context.actions, [])
+
+
+    async def test_terminal_tool_stops_without_reexecuting_an_environment_action(self):
+        context = PlainAgentContextProbe(['tool_calls'], terminal_tool=True)
+        self.assertEqual(await self.agent().run(context), [text_part('response1')])
+        self.assertTrue(context.observation.terminated)
+        self.assertEqual(len(context.calls), 1)
+        self.assertEqual(context.actions, [])
+
+
+    async def test_every_dataset_submits_original_content_without_scoring(self):
+        for name, package in PACKAGES.items():
+            environment = package['environment']({})
+            context = EnvironmentContext(REGISTRY, MemoryFileStore(), lambda:False, time.monotonic()+60, 0, {})
+            observation = environment.reset(component_task(name), context)
+            validate('Observation', to_wire(observation))
+            self.assertFalse(hasattr(environment, 'step'))
+            self.assertFalse(hasattr(environment, 'parse_action'))
+
+
+    async def test_plain_agent_uses_tools_for_stateful_interaction(self):
+        from examples.counter_environment import CounterEnvironment, CounterInput, register_schemas
+        from examples.tools import increment
+        from uenv.sdk.tools import ToolHost
+        from uenv.sdk import TaskSpec
+        from types import SimpleNamespace
+        registry = SchemaRegistry.bundled()
+        register_schemas(registry)
+        class Artifacts(MemoryFileStore):
+            def put(self, content, media_type):
+                return {'uri':'memory://image', 'digest':'sha256:'+hashlib.sha256(content).hexdigest(),
+                        'size_bytes':len(content), 'media_type':media_type}
+        environment = CounterEnvironment({})
+        env_context = EnvironmentContext(registry, Artifacts(), lambda:False, time.monotonic()+60, 0, {})
+        initial = environment.reset(TaskSpec('counter', {}, '1', CounterInput(goal=2)), env_context)
+        implementation = {'id':'tools/lookup', 'version':'1', 'digest':'sha256:' + '0'*64}
+        binding = {'name':'lookup', 'implementation':implementation,
+                   'config':{'schema_ref':'uenv://schemas/vnext/EmptyConfig', 'data':{}},
+                   'execution_scope':'sandbox', 'required_capabilities':[]}
+        host = ToolHost(registry)
+        host.prepare([binding], {'tools/lookup':increment},
+                     {'lookup':SimpleNamespace(config={}, environment=environment)}, {})
+        class Context(PlainAgentContextProbe):
+            async def generate(self, messages):
+                event = await super().generate(messages)
+                event['tool_calls'][0]['arguments'] = {'amount':1}
+                return event
+            async def call_tool(self, call):
+                result = await host.execute(call)  # Test transport; Rust gate verified separately.
+                self.observation = Observation(**result['observation'])
+                return self.observation
+        context = Context(['tool_calls', 'tool_calls'])
+        context.registry, context.observation = registry, initial
+        await self.agent().run(context)
+        self.assertEqual(environment.value, 2)
+        self.assertEqual(len(context.requests), 2)
+        self.assertTrue(context.observation.terminated)
+        self.assertEqual(context.requests[1][-1]['content'][-1]['structured']['data']['value'], 1)
+
 
 
 class PythonScorerTests(unittest.TestCase):
@@ -876,6 +1213,33 @@ class PythonScorerTests(unittest.TestCase):
     def test_olymmath_rules(self):
         self.check_cases(OlymmathScorer({}), [(r"\boxed{\frac{1}{2}}", "0.5", True), (r"\boxed{x = 072}", "72", True), (r"\boxed{6}", "16", False)])
 
+    def test_scoring_state_is_separate_from_observation_and_survives_cleanup(self):
+        from examples.counter_environment import CounterEnvironment, CounterInput, ProgressScorer, register_schemas
+        from uenv.sdk import TaskSpec
+        registry = SchemaRegistry.bundled()
+        register_schemas(registry)
+        environment = CounterEnvironment({})
+        environment.goal, environment.value = 2, 2
+        context = EnvironmentContext(registry, MemoryFileStore(), lambda: False,
+                                     time.monotonic() + 60, 0, {})
+        task = TaskSpec('counter', {}, '1', CounterInput(goal=2))
+        # Worker takes an independent snapshot before cleanup, without an output wrapper.
+        state = copy.deepcopy(environment.state_snapshot(context))
+        self.assertFalse(hasattr(environment, "finalize"))
+        environment.close(context)
+        request = ScoreInput(task, [], MemoryFileStore().put_json([]), state=state)
+        score = ProgressScorer({}).score(request, ScoringContext(
+            time.monotonic() + 60, registry, lambda: False))
+        self.assertEqual(environment.value, -1)
+        self.assertEqual(score.reward, 1.0)
+        self.assertEqual(request.state.value, 2)
+        self.assertEqual(request.final_answer, [])
+        self.assertEqual(set(to_wire(request)), {'task', 'final_answer', 'trajectory_ref', 'state'})
+        # The public result schema cannot carry the private snapshot or the old wrapper.
+        fields = SCHEMA['$defs']['EpisodeResult']['properties']
+        self.assertNotIn('state', fields)
+        self.assertNotIn('outcome', fields)
+
     def test_harness_is_a_worker_service_not_dataset_dispatch(self):
         for name in ("dscodebench", "swe_verified", "swe_lite", "swe_pro", "swe_smith"):
             manifest = load(GENERATED_ROOT / "packages" / name / "manifest.json")
@@ -890,11 +1254,43 @@ class PythonScorerTests(unittest.TestCase):
                     ScoringContext(deadline=time.monotonic() + 120, registry=REGISTRY, cancelled=lambda: False),
                 )
 
+    def test_patch_file_submission_uses_final_answer_through_harness(self):
+        from uenv.sdk import evaluate_harness, read_reference_text
+        store = MemoryFileStore()
+        reference = store.put_json({'patch': 'example'})
+        content = [text_part('Patch attached'), {'kind': 'artifact', 'artifact': reference}]
+        request = ScoreInput(component_task('dscodebench'), content, store.put_json([]),
+                             private_data=component_private_data('dscodebench'))
+        wire = to_wire(request)
+        # Worker wire TaskSpec also carries internal version/digest, omitted from the SDK view.
+        wire['task'] = generated('dscodebench', 'task.json')
+        validate('ScoreInput', wire)
+        with self.assertRaises(ValidationError):
+            validate('ScoreInput', dict(wire, artifacts=[]))
+        with self.assertRaises(ValueError):
+            read_reference_text(request)  # A text-only rule must not silently drop the file.
+        def run_harness(command):
+            self.assertEqual(command['final_answer'], content)
+            self.assertNotIn('artifacts', command)
+            with self.assertRaises(ValidationError):
+                validate('HarnessRequest', dict(command, artifacts=[]))
+            return {'status': 'ok', 'success': True, 'tests_run': 1, 'tests_passed': 1,
+                    'report_ref': store.put_json({'success': True})}
+        result = evaluate_harness(request, ScoringContext(
+            time.monotonic() + 60, REGISTRY, lambda: False, run_harness=run_harness))
+        self.assertEqual(result.reward, 1.0)
+        self.assertEqual(request.final_answer, content)
+
     def test_harness_candidate_failure_is_valid_zero_reward(self):
         module = importlib.import_module("dscodebench.scorer")
-        store = MemoryArtifacts()
+        store = MemoryFileStore()
         report = {"status": "ok", "success": False, "tests_run": 1, "tests_passed": 0, "report_ref": store.put_json({"success": False})}
         private_data = component_private_data("dscodebench")
+        def run_harness(request):
+            self.assertEqual(set(request), {'final_answer', 'private_data', 'remaining_timeout_ms'})
+            self.assertEqual(request['final_answer'], [text_part('candidate')])
+            self.assertNotIn('artifacts', request)
+            return report
         result = score_candidate(
             module.DscodebenchScorer({}),
             "candidate",
@@ -903,17 +1299,30 @@ class PythonScorerTests(unittest.TestCase):
                 deadline=time.monotonic() + 120,
                 registry=REGISTRY,
                 cancelled=lambda: False,
-                run_harness=lambda _: report,
+                run_harness=run_harness,
             ),
         )
         self.assertFalse(result.success)
         self.assertEqual(result.reward, 0.0)
 
 
+class SDKToolTests(unittest.TestCase):
+    def test_python_and_native_tool_host(self):
+        import os
+        env = dict(os.environ)
+        env['PYTHONPATH'] = os.pathsep.join([str(ROOT / 'reference/sdk/src'), str(ROOT / '.dependencies')])
+        completed = subprocess.run([sys.executable, '-m', 'unittest', 'discover',
+            '-s', str(ROOT / 'reference/sdk/tests'), '-v'], cwd=ROOT, env=env, text=True, capture_output=True)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+
+
 class RustControlTests(unittest.TestCase):
     def test_rust_control_reference(self):
+        import os
+        env = dict(os.environ)
+        env.setdefault('UENV_INTEGRATION_PYTHON', sys.executable)
         command = ["cargo", "test", "--offline", "--locked", "--manifest-path", str(ROOT / "Cargo.toml")]
-        completed = subprocess.run(command, cwd=ROOT, text=True, capture_output=True)
+        completed = subprocess.run(command, cwd=ROOT, env=env, text=True, capture_output=True)
         if completed.returncode:
             self.fail(completed.stdout + completed.stderr)
 

@@ -1,0 +1,46 @@
+syntax = "proto3";
+package uenv.v1;
+import "google/protobuf/struct.proto";
+import "uenv/v1/annotations.proto";
+import "uenv/v1/common.proto";
+
+message StateEvent {
+  option (message_rule) = "{\"description\":\"基础生命周期事件\",\"additionalProperties\":false}";
+  optional string phase = 1 [json_name = "phase", (required) = true, (field_rule) = "{\"description\":\"执行阶段\",\"enum\":[\"preparing\",\"running\",\"scoring\",\"finalizing\",\"cleaning\"]}"];
+  optional SessionRef session = 2 [json_name = "session"];
+}
+
+message TrajectoryEvent {
+  option (message_rule) = "{\"description\":\"所有数据集共享事件信封，事件 payload 按 kind 绑定\",\"additionalProperties\":false,\"allOf\":[{\"if\":{\"properties\":{\"kind\":{\"const\":\"state\"}}},\"then\":{\"properties\":{\"payload\":{\"$ref\":\"#/$defs/StateEvent\"}}}},{\"if\":{\"properties\":{\"kind\":{\"const\":\"observation\"}}},\"then\":{\"properties\":{\"payload\":{\"$ref\":\"#/$defs/Observation\"}}}},{\"if\":{\"properties\":{\"kind\":{\"const\":\"generation\"}}},\"then\":{\"properties\":{\"payload\":{\"$ref\":\"#/$defs/GenerationEvent\"}}}},{\"if\":{\"properties\":{\"kind\":{\"const\":\"tool_call\"}}},\"then\":{\"properties\":{\"payload\":{\"$ref\":\"#/$defs/ToolCall\"}}}},{\"if\":{\"properties\":{\"kind\":{\"const\":\"tool_result\"}}},\"then\":{\"properties\":{\"payload\":{\"$ref\":\"#/$defs/ToolResult\"}}}},{\"if\":{\"properties\":{\"kind\":{\"const\":\"score\"}}},\"then\":{\"properties\":{\"payload\":{\"$ref\":\"#/$defs/ScoreResult\"}}}},{\"if\":{\"properties\":{\"kind\":{\"const\":\"error\"}}},\"then\":{\"properties\":{\"payload\":{\"$ref\":\"#/$defs/ErrorRecord\"}}}},{\"if\":{\"properties\":{\"kind\":{\"const\":\"terminal\"}}},\"then\":{\"properties\":{\"payload\":{\"$ref\":\"#/$defs/TerminalEvent\"}}}}]}";
+  optional google.protobuf.Value schema_version = 1 [json_name = "schema_version", (required) = true, (field_rule) = "{\"const\":\"vnext.3\",\"description\":\"契约版本\"}"];
+  optional string event_id = 2 [json_name = "event_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string run_id = 3 [json_name = "run_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string episode_id = 4 [json_name = "episode_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional int64 attempt_id = 5 [json_name = "attempt_id", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"attempt 身份\"}"];
+  optional string task_id = 6 [json_name = "task_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional int64 sequence = 7 [json_name = "sequence", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"由 Worker 事件收集器分配的连续序号，从 0 开始\"}"];
+  optional int64 occurred_at_ms = 8 [json_name = "occurred_at_ms", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟\"}"];
+  optional string parent_event_id = 9 [json_name = "parent_event_id", (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string kind = 10 [json_name = "kind", (required) = true, (field_rule) = "{\"description\":\"事件类型\",\"enum\":[\"state\",\"observation\",\"generation\",\"tool_call\",\"tool_result\",\"score\",\"error\",\"terminal\"]}"];
+  optional google.protobuf.Value payload = 11 [json_name = "payload", (required) = true, (field_rule) = "{\"description\":\"由 kind 决定的确定类型\"}"];
+}
+
+message TrajectoryManifest {
+  option (message_rule) = "{\"description\":\"attempt 的轨迹索引；评分前快照与最终封存使用同一结构，终态事件不反向包含此索引\",\"additionalProperties\":false}";
+  optional google.protobuf.Value schema_version = 1 [json_name = "schema_version", (required) = true, (field_rule) = "{\"const\":\"vnext.3\",\"description\":\"契约版本\"}"];
+  optional string run_id = 2 [json_name = "run_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string episode_id = 3 [json_name = "episode_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional int64 attempt_id = 4 [json_name = "attempt_id", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"attempt 身份\"}"];
+  optional string task_id = 5 [json_name = "task_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  repeated ArtifactRef event_segments = 6 [json_name = "event_segments", (required) = true, (field_rule) = "{\"description\":\"按 sequence 有序的 JSONL 事件分片\"}"];
+  optional int64 event_count = 7 [json_name = "event_count", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"事件总数\"}"];
+  optional string trajectory_status = 8 [json_name = "trajectory_status", (required) = true, (field_rule) = "{\"description\":\"清单所处阶段及最终记录完整性；不表示任务执行成功或失败\",\"enum\":[\"scoring_checkpoint\",\"final_complete\",\"final_partial\"]}"];
+  optional int64 created_at_ms = 9 [json_name = "created_at_ms", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟\"}"];
+}
+
+message TerminalEvent {
+  option (message_rule) = "{\"description\":\"轨迹内终态摘要，避免与 EpisodeResult.trajectory_ref 形成 digest 环\",\"additionalProperties\":false}";
+  optional string execution_status = 1 [json_name = "execution_status", (required) = true, (field_rule) = "{\"description\":\"终态\",\"enum\":[\"completed\",\"failed\",\"timeout\",\"cancelled\"]}"];
+  optional Usage usage = 2 [json_name = "usage", (required) = true];
+  optional ErrorRecord error = 3 [json_name = "error"];
+}

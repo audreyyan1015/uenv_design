@@ -45,19 +45,23 @@
     "finalize_reserve_ms": 120000,
     "max_generations": 1,
     "max_tool_calls": 0,
-    "max_environment_steps": 0,
     "max_total_output_tokens": 32768
   },
   "environment": {
-    "implementation": {
-      "id": "datasets/gsm8k",
-      "version": "1.0.0",
-      "digest": "sha256:93b6cc135f50a89e297cc7e03160f16ff709652dfc7137da3166159095d605ea"
-    },
+    "schema_ref": "uenv://schemas/vnext/EmptyConfig",
+    "data": {}
+  },
+  "scoring": {
+    "enabled": true,
     "config": {
       "schema_ref": "uenv://schemas/vnext/EmptyConfig",
       "data": {}
     }
+  },
+  "dataset_package": {
+    "id": "datasets/gsm8k",
+    "version": "1.0.0",
+    "digest": "sha256:93b6cc135f50a89e297cc7e03160f16ff709652dfc7137da3166159095d605ea"
   },
   "agent": {
     "implementation": {
@@ -71,17 +75,6 @@
         "history_policy": "full",
         "system_prompt": ""
       }
-    }
-  },
-  "scorer": {
-    "implementation": {
-      "id": "datasets/gsm8k",
-      "version": "1.0.0",
-      "digest": "sha256:93b6cc135f50a89e297cc7e03160f16ff709652dfc7137da3166159095d605ea"
-    },
-    "config": {
-      "schema_ref": "uenv://schemas/vnext/EmptyConfig",
-      "data": {}
     }
   },
   "backend": {
@@ -108,5 +101,5 @@
   "required_capabilities": [],
   "internet_access": false,
   "deadline_at_ms": 1800000300000,
-  "plan_digest": "sha256:94e31a13755aab9f094716d20fa14cb7b7ad639359b81b7b8783b784132d5f88"
+  "plan_digest": "sha256:168eb9d44bc8d8ffb859d8904cce3f5a0caa29bf039ea7d967c627f5ac8ea6e2"
 }

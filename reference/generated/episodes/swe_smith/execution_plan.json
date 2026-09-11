@@ -79,19 +79,23 @@
     "finalize_reserve_ms": 120000,
     "max_generations": 30,
     "max_tool_calls": 60,
-    "max_environment_steps": 0,
     "max_total_output_tokens": 32768
   },
   "environment": {
-    "implementation": {
-      "id": "datasets/swe-smith",
-      "version": "1.0.0",
-      "digest": "sha256:50cac3738cdb8f7360918b9241227b0c38331bf57ae6cf8a3fe40a774e92d3e8"
-    },
+    "schema_ref": "uenv://schemas/vnext/EmptyConfig",
+    "data": {}
+  },
+  "scoring": {
+    "enabled": true,
     "config": {
       "schema_ref": "uenv://schemas/vnext/EmptyConfig",
       "data": {}
     }
+  },
+  "dataset_package": {
+    "id": "datasets/swe-smith",
+    "version": "1.0.0",
+    "digest": "sha256:50cac3738cdb8f7360918b9241227b0c38331bf57ae6cf8a3fe40a774e92d3e8"
   },
   "agent": {
     "implementation": {
@@ -104,17 +108,6 @@
       "data": {
         "system_prompt": ""
       }
-    }
-  },
-  "scorer": {
-    "implementation": {
-      "id": "datasets/swe-smith",
-      "version": "1.0.0",
-      "digest": "sha256:50cac3738cdb8f7360918b9241227b0c38331bf57ae6cf8a3fe40a774e92d3e8"
-    },
-    "config": {
-      "schema_ref": "uenv://schemas/vnext/EmptyConfig",
-      "data": {}
     }
   },
   "backend": {
@@ -138,14 +131,9 @@
     {
       "name": "terminal",
       "implementation": {
-        "id": "tools/terminal",
+        "id": "agents/openhands/tools/terminal",
         "version": "1.0.0",
-        "digest": "sha256:92eb3c1319cd90fa79bd07b13b908913882551a56d03e08eb8741cbf0f19351c"
-      },
-      "adapter": {
-        "id": "adapters/openhands-terminal",
-        "version": "1.0.0",
-        "digest": "sha256:2dcc912f731cf4904e5adce3430c94b1a620b8c0fdfe44a63631854bb6af3c5a"
+        "digest": "sha256:e6c3c001ccb048dd47a172e4ae3bcf91594c06482b3afe4486aff6390265e258"
       },
       "config": {
         "schema_ref": "uenv://schemas/vnext/ToolConfig",
@@ -154,24 +142,23 @@
           "max_preview_bytes": 8192
         }
       },
-      "interface": "mcp.v1",
       "execution_scope": "sandbox",
       "required_capabilities": [
         "exec.v1",
         "filesystem.v1"
-      ]
+      ],
+      "native_agent": {
+        "id": "agents/openhands",
+        "version": "1.0.0",
+        "digest": "sha256:e6c3c001ccb048dd47a172e4ae3bcf91594c06482b3afe4486aff6390265e258"
+      }
     },
     {
       "name": "file_editor",
       "implementation": {
-        "id": "tools/file-editor",
+        "id": "agents/openhands/tools/file-editor",
         "version": "1.0.0",
-        "digest": "sha256:86d483c89067405d5d54da40fbeb0b6d922ae7146cccf1a00947e6bf420f1f33"
-      },
-      "adapter": {
-        "id": "adapters/openhands-file-editor",
-        "version": "1.0.0",
-        "digest": "sha256:4d75147ac89d0c66148d6d4fd7e7a36f54ac44425126c5f57db0204aa5ca7428"
+        "digest": "sha256:e6c3c001ccb048dd47a172e4ae3bcf91594c06482b3afe4486aff6390265e258"
       },
       "config": {
         "schema_ref": "uenv://schemas/vnext/ToolConfig",
@@ -180,52 +167,54 @@
           "max_preview_bytes": 8192
         }
       },
-      "interface": "mcp.v1",
       "execution_scope": "sandbox",
       "required_capabilities": [
         "exec.v1",
         "filesystem.v1"
-      ]
+      ],
+      "native_agent": {
+        "id": "agents/openhands",
+        "version": "1.0.0",
+        "digest": "sha256:e6c3c001ccb048dd47a172e4ae3bcf91594c06482b3afe4486aff6390265e258"
+      }
     },
     {
       "name": "task_tracker",
       "implementation": {
-        "id": "tools/openhands-task-tracker",
+        "id": "agents/openhands/tools/task-tracker",
         "version": "1.0.0",
-        "digest": "sha256:3fe059445b4ab72a0a6c13fb5a07b42cea4aff231903a653e2ae5c1250eee7fa"
-      },
-      "adapter": {
-        "id": "adapters/openhands-native-state",
-        "version": "1.0.0",
-        "digest": "sha256:368aeb2f246f142ad0f387632b027475ae22d181e40ef308d222fcc1fe6ab90e"
+        "digest": "sha256:e6c3c001ccb048dd47a172e4ae3bcf91594c06482b3afe4486aff6390265e258"
       },
       "config": {
         "schema_ref": "uenv://schemas/vnext/EmptyConfig",
         "data": {}
       },
-      "interface": "openhands_native.v1",
       "execution_scope": "agent_state",
-      "required_capabilities": []
+      "required_capabilities": [],
+      "native_agent": {
+        "id": "agents/openhands",
+        "version": "1.0.0",
+        "digest": "sha256:e6c3c001ccb048dd47a172e4ae3bcf91594c06482b3afe4486aff6390265e258"
+      }
     },
     {
       "name": "finish",
       "implementation": {
-        "id": "tools/openhands-finish",
+        "id": "agents/openhands/tools/finish",
         "version": "1.0.0",
-        "digest": "sha256:3024eae758878115a9d09b5d9c1f0311558d95470b584e65eb29e3c26d39d57b"
-      },
-      "adapter": {
-        "id": "adapters/openhands-native-state",
-        "version": "1.0.0",
-        "digest": "sha256:368aeb2f246f142ad0f387632b027475ae22d181e40ef308d222fcc1fe6ab90e"
+        "digest": "sha256:e6c3c001ccb048dd47a172e4ae3bcf91594c06482b3afe4486aff6390265e258"
       },
       "config": {
         "schema_ref": "uenv://schemas/vnext/EmptyConfig",
         "data": {}
       },
-      "interface": "openhands_native.v1",
       "execution_scope": "agent_state",
-      "required_capabilities": []
+      "required_capabilities": [],
+      "native_agent": {
+        "id": "agents/openhands",
+        "version": "1.0.0",
+        "digest": "sha256:e6c3c001ccb048dd47a172e4ae3bcf91594c06482b3afe4486aff6390265e258"
+      }
     }
   ],
   "runtime": {
@@ -239,5 +228,5 @@
   ],
   "internet_access": false,
   "deadline_at_ms": 1800000300000,
-  "plan_digest": "sha256:74cf8fa9d0558a47a2c8d9bd57cf5a98d8c3deddc268bf637dee035628b83d5a"
+  "plan_digest": "sha256:d3d6fcc3b2f0725babb0a42f963caabf7b9c2dc9f0806d467ef15a59261f7a81"
 }

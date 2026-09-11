@@ -1,0 +1,153 @@
+syntax = "proto3";
+package uenv.v1;
+import "google/protobuf/struct.proto";
+import "uenv/v1/annotations.proto";
+import "uenv/v1/common.proto";
+import "uenv/v1/interaction.proto";
+import "uenv/v1/run.proto";
+import "uenv/v1/scoring.proto";
+import "uenv/v1/task.proto";
+
+message EpisodeRequest {
+  option (message_rule) = "{\"description\":\"Bridge -> Server；不接受客户端指定 attempt 或 lease\",\"additionalProperties\":false}";
+  optional string request_id = 1 [json_name = "request_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string episode_id = 2 [json_name = "episode_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional TaskSpec task = 3 [json_name = "task", (required) = true];
+  optional TypedConfig private_data = 4 [json_name = "private_data", (field_rule) = "{\"description\":\"可选评分依据，随受控请求配对提交；大型测试使用内部 ArtifactRef；不得交给 Agent/Environment 或公开轨迹\"}"];
+  optional int64 seed = 5 [json_name = "seed", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"本次 episode 种子\"}"];
+  optional int64 sample_index = 6 [json_name = "sample_index", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"批次内位置，从 0 开始\"}"];
+  optional string batch_id = 7 [json_name = "batch_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+}
+
+message BatchRequest {
+  option (message_rule) = "{\"description\":\"一次提交共享运行配置和非空任务列表；无前置配置注册请求\",\"additionalProperties\":false}";
+  optional RunSpec run_spec = 1 [json_name = "run_spec", (required) = true, (field_rule) = "{\"description\":\"本批唯一配置；同一 run_id 的内容必须与已保存配置一致\"}"];
+  optional string batch_id = 2 [json_name = "batch_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  repeated EpisodeRequest episodes = 3 [json_name = "episodes", (required) = true, (field_rule) = "{\"description\":\"任务按 sample_index 排列；各项 batch_id 与批次一致，不携带配置覆盖\",\"minItems\":1}"];
+}
+
+message BatchReceipt {
+  option (message_rule) = "{\"description\":\"提交确认不是执行成功\",\"additionalProperties\":false}";
+  optional string batch_id = 1 [json_name = "batch_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  repeated string episode_ids = 2 [json_name = "episode_ids", (required) = true, (field_rule) = "{\"description\":\"已接纳的 episode ID\",\"items\":{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}}"];
+}
+
+message ExecutionPlan {
+  option (message_rule) = "{\"description\":\"由请求与配置转换而来，不嵌套 EpisodeRequest/RunSpec；每项执行配置仅一处生效\",\"additionalProperties\":false,\"allOf\":[{\"if\":{\"properties\":{\"purpose\":{\"const\":\"training\"}}},\"then\":{\"required\":[\"training\"]},\"else\":{\"not\":{\"required\":[\"training\"]}}},{\"if\":{\"properties\":{\"purpose\":{\"enum\":[\"evaluation\",\"training\"]}}},\"then\":{\"properties\":{\"scoring\":{\"properties\":{\"enabled\":{\"const\":true}}}}}},{\"if\":{\"properties\":{\"scoring\":{\"properties\":{\"enabled\":{\"const\":false}}}}},\"then\":{\"not\":{\"required\":[\"private_data\"]}}}]}";
+  optional string episode_id = 1 [json_name = "episode_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional TaskSpec task = 2 [json_name = "task", (required) = true];
+  optional TypedConfig private_data = 3 [json_name = "private_data", (field_rule) = "{\"description\":\"可选评分依据，随受控请求配对提交；大型测试使用内部 ArtifactRef；不得交给 Agent/Environment 或公开轨迹\"}"];
+  optional int64 seed = 4 [json_name = "seed", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"本次 episode 种子\"}"];
+  optional string run_id = 5 [json_name = "run_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string purpose = 6 [json_name = "purpose", (required) = true, (field_rule) = "{\"description\":\"结果用途；不决定评分算法\",\"enum\":[\"evaluation\",\"training\",\"trajectory_collection\"]}"];
+  optional ModelSpec model = 7 [json_name = "model", (required) = true];
+  optional Limits limits = 8 [json_name = "limits", (required) = true];
+  optional TrainingSpec training = 9 [json_name = "training", (field_rule) = "{\"description\":\"仅 purpose=training 时必填；评测和轨迹采集时禁止出现\"}"];
+  optional TypedConfig environment = 10 [json_name = "environment", (required) = true, (field_rule) = "{\"description\":\"包内 Environment 的参数；不含实现选择\"}"];
+  optional ScoringSpec scoring = 11 [json_name = "scoring", (required) = true];
+  optional ResolvedComponent dataset_package = 12 [json_name = "dataset_package", (required) = true, (field_rule) = "{\"description\":\"唯一锁定的数据集包；各角色按本包 manifest 加载，禁止跨包覆盖\"}"];
+  optional google.protobuf.Struct agent = 13 [json_name = "agent", (required) = true, (field_rule) = "{\"description\":\"选择一个实现及其 schema 验证后的参数\",\"properties\":{\"implementation\":{\"$ref\":\"#/$defs/ResolvedComponent\"},\"config\":{\"$ref\":\"#/$defs/TypedConfig\"}},\"required\":[\"implementation\",\"config\"],\"additionalProperties\":false}"];
+  optional google.protobuf.Struct backend = 14 [json_name = "backend", (required) = true, (field_rule) = "{\"description\":\"由用户明确选择的任务后端；不读取数据集名称做选择\",\"properties\":{\"implementation\":{\"$ref\":\"#/$defs/ResolvedComponent\"},\"config\":{\"$ref\":\"#/$defs/TypedConfig\"},\"resources\":{\"$ref\":\"#/$defs/Resources\",\"default\":{}}},\"required\":[\"implementation\",\"config\",\"resources\"],\"additionalProperties\":false}"];
+  optional int64 attempt_id = 15 [json_name = "attempt_id", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"Server 生成；正常首次执行为 1，只有基础设施重试才递增，且不重选配置\"}"];
+  repeated ResolvedToolBinding tools = 16 [json_name = "tools", (required) = true, (field_rule) = "{\"description\":\"唯一生效工具表；保留 RunSpec.tools 的字段名，锁定版本和执行路由\"}"];
+  repeated string required_capabilities = 17 [json_name = "required_capabilities", (required) = true, (field_rule) = "{\"description\":\"完整运行能力需求，仅供 Worker 调度与兼容性核验；不是访问授权\",\"items\":{\"description\":\"版本化运行能力标识\"}}"];
+  optional bool internet_access = 18 [json_name = "internet_access", (required) = true, (field_rule) = "{\"description\":\"Environment 是否需要访问公共互联网；Server 锁定，Backend 受控落实\"}"];
+  optional google.protobuf.Struct runtime = 19 [json_name = "runtime", (field_rule) = "{\"description\":\"本条计划唯一生效的容器资源，不是待选择的候选\",\"properties\":{\"image\":{\"type\":\"string\",\"description\":\"唯一生效镜像；task.runtime 只是原始任务候选，Worker 不再消费它\",\"pattern\":\"^[^@\\\\s]+@sha256:[0-9a-f]{64}$\"},\"image_source\":{\"type\":\"string\",\"description\":\"最终镜像的来源，用于审计\",\"enum\":[\"run\",\"task\",\"package\"]}},\"required\":[\"image\",\"image_source\"],\"additionalProperties\":false}"];
+  optional string plan_digest = 20 [json_name = "plan_digest", (required) = true, (field_rule) = "{\"description\":\"内容 SHA-256；必须对应实际字节\",\"pattern\":\"^sha256:[0-9a-f]{64}$\"}"];
+  optional int64 deadline_at_ms = 21 [json_name = "deadline_at_ms", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"首次接纳时间加 limits.total_timeout_ms，重试不续期；Worker 唯一总截止时间\"}"];
+}
+
+message DispatchRequest {
+  option (message_rule) = "{\"description\":\"Server -> Worker；派生预算字段只能收紧 ExecutionPlan 中的限制\",\"additionalProperties\":false}";
+  optional ExecutionPlan plan = 1 [json_name = "plan", (required) = true];
+  optional Lease lease = 2 [json_name = "lease", (required) = true];
+  optional int64 remaining_timeout_ms = 3 [json_name = "remaining_timeout_ms", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"派发时距离 plan.deadline_at_ms 的剩余上限；Worker 转为本机单调时钟\"}"];
+  optional Usage consumed_usage = 4 [json_name = "consumed_usage", (required) = true, (field_rule) = "{\"description\":\"此前 attempt 已确认消耗的 episode 累计用量；首次派发全为 0\"}"];
+}
+
+message EpisodeResult {
+  option (message_rule) = "{\"description\":\"Worker 产生候选结果，Server 校验租约后形成唯一权威终态\",\"additionalProperties\":false,\"allOf\":[{\"if\":{\"properties\":{\"execution_status\":{\"const\":\"completed\"}}},\"then\":{\"required\":[\"started_at_ms\",\"trajectory_ref\",\"final_answer\",\"termination_reason\"]}}]}";
+  optional string run_id = 1 [json_name = "run_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string episode_id = 2 [json_name = "episode_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional int64 attempt_id = 3 [json_name = "attempt_id", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"有效 attempt\"}"];
+  optional string task_id = 4 [json_name = "task_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string execution_status = 5 [json_name = "execution_status", (required) = true, (field_rule) = "{\"description\":\"执行是否完成\",\"enum\":[\"completed\",\"failed\",\"timeout\",\"cancelled\"]}"];
+  optional ScoreResult score = 6 [json_name = "score", (field_rule) = "{\"description\":\"仅实际评分时产生；无评分省略，Server 结合 ExecutionPlan 校验应有评分，不能伪造零分\"}"];
+  repeated ContentPart final_answer = 7 [json_name = "final_answer", (field_rule) = "{\"description\":\"Agent.run 显式返回的最终提交；文本、补丁文本、文件引用复用 ContentPart；可为空表示仅按环境状态评分，不自动提取最后一次模型响应或工作区修改\"}"];
+  optional string termination_reason = 8 [json_name = "termination_reason", (field_rule) = "{\"description\":\"Worker 根据实际停止事实填写；失败和取消使用 execution_status 与 error\",\"enum\":[\"final_answer\",\"environment_terminal\",\"environment_truncated\",\"budget_exhausted\"]}"];
+  optional ArtifactRef trajectory_ref = 9 [json_name = "trajectory_ref"];
+  optional Usage usage = 10 [json_name = "usage", (required) = true];
+  optional int64 started_at_ms = 11 [json_name = "started_at_ms", (field_rule) = "{\"minimum\":0,\"description\":\"UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟\"}"];
+  optional int64 finished_at_ms = 12 [json_name = "finished_at_ms", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟\"}"];
+  optional ErrorRecord error = 13 [json_name = "error"];
+  optional string cleanup_status = 14 [json_name = "cleanup_status", (required) = true, (field_rule) = "{\"description\":\"清理可独立重试，不改变任务评分\",\"enum\":[\"completed\",\"pending\",\"failed\"]}"];
+}
+
+message WorkerRegistration {
+  option (message_rule) = "{\"description\":\"Worker 声明能力，供 Server 匹配\",\"additionalProperties\":false}";
+  optional string worker_id = 1 [json_name = "worker_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string endpoint = 2 [json_name = "endpoint", (required) = true, (field_rule) = "{\"description\":\"Worker 地址\"}"];
+  optional int64 capacity = 3 [json_name = "capacity", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"可同时承载的 episode 槽位总数；不同于 CPU/内存/存储 resource_capacity\"}"];
+  repeated string capabilities = 4 [json_name = "capabilities", (required) = true, (field_rule) = "{\"description\":\"运行能力\",\"items\":{\"description\":\"能力名\"}}"];
+  repeated ResolvedComponent components = 5 [json_name = "components", (required) = true, (field_rule) = "{\"description\":\"已安装可执行组件；包括后端，不另设后端清单\"}"];
+  optional Resources resource_capacity = 6 [json_name = "resource_capacity", (required) = true, (field_rule) = "{\"description\":\"Worker 可管理的 CPU/内存/存储总量；BackendSpec.resources 是单个 episode 的资源申请\"}"];
+}
+
+message Heartbeat {
+  option (message_rule) = "{\"description\":\"控制面健康与容量快照\",\"additionalProperties\":false}";
+  optional string worker_id = 1 [json_name = "worker_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional int64 timestamp_ms = 2 [json_name = "timestamp_ms", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"UTC Unix 毫秒；跨机器用于记录，超时执行使用本机单调时钟\"}"];
+  repeated string active_leases = 3 [json_name = "active_leases", (required) = true, (field_rule) = "{\"description\":\"活跃 lease ID\",\"items\":{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}}"];
+  optional int64 available_slots = 4 [json_name = "available_slots", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"当前可用 episode 槽位；由 WorkerRegistration.capacity 减去已占用槽位得到，不是第二份总容量\"}"];
+  optional bool draining = 5 [json_name = "draining", (required) = true, (field_rule) = "{\"description\":\"不再接受新任务\"}"];
+}
+
+message CancelRequest {
+  option (message_rule) = "{\"description\":\"Server 或客户端取消请求；取消意图具有幂等性\",\"additionalProperties\":false}";
+  optional string request_id = 1 [json_name = "request_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string episode_id = 2 [json_name = "episode_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string reason = 3 [json_name = "reason", (required) = true, (field_rule) = "{\"description\":\"取消原因\"}"];
+}
+
+message ResultReport {
+  option (message_rule) = "{\"description\":\"Worker 重传结果；Server 按 attempt+lease 去重和排除旧结果\",\"additionalProperties\":false}";
+  optional Lease lease = 1 [json_name = "lease", (required) = true];
+  optional EpisodeResult result = 2 [json_name = "result", (required) = true];
+}
+
+message CursorRequest {
+  option (message_rule) = "{\"description\":\"查询或订阅结果/事件\",\"additionalProperties\":false}";
+  optional string run_id = 1 [json_name = "run_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional string episode_id = 2 [json_name = "episode_id", (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional int64 after_sequence = 3 [json_name = "after_sequence", (field_rule) = "{\"minimum\":0,\"description\":\"已接收的最后序号\"}"];
+  optional int64 limit = 4 [json_name = "limit", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"返回上限\"}"];
+}
+
+message ExecRequest {
+  option (message_rule) = "{\"description\":\"任务后端执行命令，不包含数据集字段\",\"additionalProperties\":false}";
+  optional string session_id = 1 [json_name = "session_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  repeated string argv = 2 [json_name = "argv", (required) = true, (field_rule) = "{\"description\":\"参数列表\",\"items\":{\"description\":\"单个参数，不经过隐式 shell 拼接\"}}"];
+  optional string cwd = 3 [json_name = "cwd", (required) = true, (field_rule) = "{\"description\":\"沙箱内路径\"}"];
+  optional google.protobuf.Struct environment_variables = 4 [json_name = "environment_variables", (required) = true, (field_rule) = "{\"additionalProperties\":{\"type\":\"string\"},\"description\":\"命令环境变量映射；密钥由受控注入，不入轨迹\"}"];
+  optional int64 timeout_ms = 5 [json_name = "timeout_ms", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"命令预算\"}"];
+}
+
+message ExecResult {
+  option (message_rule) = "{\"description\":\"底层命令结果\",\"additionalProperties\":false}";
+  optional int64 exit_code = 1 [json_name = "exit_code", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"进程退出码；信号退出另记 error\"}"];
+  optional ArtifactRef stdout_ref = 2 [json_name = "stdout_ref", (required) = true];
+  optional ArtifactRef stderr_ref = 3 [json_name = "stderr_ref", (required) = true];
+  optional int64 duration_ms = 4 [json_name = "duration_ms", (required) = true, (field_rule) = "{\"minimum\":0,\"description\":\"耗时\"}"];
+  optional ErrorRecord error = 5 [json_name = "error"];
+}
+
+message FrameworkSample {
+  option (message_rule) = "{\"description\":\"Bridge 将统一轨迹映射为训练框架输入的规范中间结构\",\"additionalProperties\":false}";
+  optional string episode_id = 1 [json_name = "episode_id", (required) = true, (field_rule) = "{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}"];
+  optional int64 attempt_id = 2 [json_name = "attempt_id", (required) = true, (field_rule) = "{\"minimum\":1,\"description\":\"attempt\"}"];
+  repeated string generation_event_ids = 3 [json_name = "generation_event_ids", (required) = true, (field_rule) = "{\"description\":\"使用的模型生成事件，保持顺序\",\"items\":{\"description\":\"不透明身份标识；不得用其他实体的 ID 代填\",\"minLength\":1,\"maxLength\":256}}"];
+  optional double reward = 4 [json_name = "reward", (required) = true, (field_rule) = "{\"description\":\"从唯一 ScoreResult.reward 复制的训练标量，不重新计算\"}"];
+  repeated string policy_versions = 5 [json_name = "policy_versions", (required) = true, (field_rule) = "{\"description\":\"与 generation_event_ids 一一对应\",\"items\":{\"description\":\"策略版本\"}}"];
+  repeated google.protobuf.Struct generation_rewards = 6 [json_name = "generation_rewards", (field_rule) = "{\"description\":\"可选逐次生成评分；Scorer 填写，Worker 验证归属，训练端按原 ID 消费\",\"items\":{\"properties\":{\"generation_id\":{\"type\":\"string\",\"description\":\"评分前轨迹中本 attempt 已记录的模型生成 ID\"},\"reward\":{\"type\":\"number\",\"description\":\"该次生成的有限分数；缺项不补零，不与整体 reward 自动合并\"}},\"required\":[\"generation_id\",\"reward\"],\"additionalProperties\":false}}"];
+  optional ArtifactRef trajectory_ref = 7 [json_name = "trajectory_ref", (required) = true];
+}

@@ -1,9 +1,10 @@
 run_id: demo-swe_verified
 purpose: evaluation
-environment:
-  implementation:
-    id: datasets/swe-verified
-    version: 1.0.0
+dataset_package:
+  id: datasets/swe-verified
+  version: 1.0.0
+scoring:
+  enabled: true
 agent:
   implementation:
     id: agents/openhands
@@ -11,23 +12,19 @@ agent:
 tools:
 - name: terminal
   implementation:
-    id: tools/terminal
+    id: agents/openhands/tools/terminal
     version: 1.0.0
 - name: file_editor
   implementation:
-    id: tools/file-editor
+    id: agents/openhands/tools/file-editor
     version: 1.0.0
 - name: task_tracker
   implementation:
-    id: tools/openhands-task-tracker
+    id: agents/openhands/tools/task-tracker
     version: 1.0.0
 - name: finish
   implementation:
-    id: tools/openhands-finish
-    version: 1.0.0
-scorer:
-  implementation:
-    id: datasets/swe-verified
+    id: agents/openhands/tools/finish
     version: 1.0.0
 backend:
   implementation:
@@ -42,7 +39,6 @@ limits:
   finalize_reserve_ms: 120000
   max_generations: 30
   max_tool_calls: 60
-  max_environment_steps: 0
   max_total_output_tokens: 32768
 runtime:
   image: example.invalid/runtime@sha256:0000000000000000000000000000000000000000000000000000000000000000
